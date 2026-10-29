@@ -46,7 +46,8 @@ jobs:
 
       - name: Pretrain on Hindi text
         run: |
-          python src/train.py --stage pretrain --dim 128 --layers 3 --ffn 512 \
+          python src/train.py --stage pretrain --text hindi_corpus.txt \
+            --dim 128 --layers 3 --ffn 512 \
             --seq-len 128 --batch 16 --steps 300 --time-budget 900
 
       - name: Chat fine-tune, clock-bound

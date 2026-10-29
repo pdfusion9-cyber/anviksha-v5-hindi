@@ -26,7 +26,7 @@ from tokenizer import CharTokenizer  # noqa: E402
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--stage", choices=["pretrain", "chat"], required=True)
-    p.add_argument("--text", default="../hindi_corpus.txt", type=Path)
+    p.add_argument("--text", default="hindi_corpus.txt", type=Path)
     p.add_argument("--chat", default="data/chat_train.jsonl", type=Path)
     p.add_argument("--out", default="runs", type=Path)
     p.add_argument("--dim", default=192, type=int)
