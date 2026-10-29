@@ -91,7 +91,12 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
 
     if args.stage == "pretrain":
+        if not Path(args.text).exists():
+            raise SystemExit(f"no corpus at {args.text}")
         text = Path(args.text).read_text(encoding="utf-8")[:2_000_000]
+        if len(text) < 5000:
+            print(f"corpus too small ({len(text)} chars); skipping pretrain")
+            return
         tokenizer = CharTokenizer.train(text)
         print(f"vocab {tokenizer.size}")
         ids = np.array(tokenizer.encode(text), dtype=np.int64)

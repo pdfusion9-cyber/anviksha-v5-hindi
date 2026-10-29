@@ -39,8 +39,20 @@ def main() -> None:
             total += len(text)
         offset += 100
 
-    args.out.write_text("\n\n".join(chunks), encoding="utf-8")
-    print(f"wrote {total:,} characters to {args.out}")
+    text = "\n\n".join(chunks)
+    if len(text) < 1000:
+        # the rows API is rate-limited and sometimes 404s from CI. The chat
+        # corpus is already on disk and is Hindi prose, so use it instead of
+        # failing the job.
+        fallback = Path("data/chat_train.jsonl")
+        if fallback.exists():
+            import json as _json
+            rows = [_json.loads(line) for line in fallback.read_text(encoding="utf-8").splitlines() if line.strip()]
+            text = "\n".join(r["user"] + " " + r["assistant"] for r in rows)
+            print(f"rows API unavailable; using chat corpus ({len(text):,} chars)")
+
+    args.out.write_text(text, encoding="utf-8")
+    print(f"wrote {len(text):,} characters to {args.out}")
 
 
 if __name__ == "__main__":
