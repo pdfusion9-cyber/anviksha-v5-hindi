@@ -22,13 +22,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
 
       - name: Install
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install numpy pyarrow pillow
+          pip install -r requirements.txt
 
       - name: Fetch Hindi instruction data
         run: python src/fetch_chat.py --target 8000 --held-out 400
