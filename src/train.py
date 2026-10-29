@@ -123,8 +123,22 @@ def main() -> None:
         save(model, tokenizer, args.out / "pretrain.pt", args)
         return
 
-    # chat fine-tune
-    tokenizer = CharTokenizer.load(args.out / "tokenizer.json")
+    # chat fine-tune — self-sufficient: if no pretrain artefacts exist (a fresh
+    # CI checkout has none), build the tokenizer from the chat data and start
+    # from random weights instead of failing
+    tokenizer_path = args.out / "tokenizer.json"
+    if tokenizer_path.exists():
+        tokenizer = CharTokenizer.load(tokenizer_path)
+        print("  loaded tokenizer from pretrain")
+    else:
+        corpus = "\n".join(
+            json.loads(line)["user"] + "\n" + json.loads(line)["assistant"]
+            for line in Path(args.chat).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+        tokenizer = CharTokenizer.train(corpus)
+        tokenizer.save(tokenizer_path)
+        print(f"  built tokenizer from chat data: vocab {tokenizer.size}")
     model = load_model(args.out / "pretrain.pt", tokenizer, args)
     pairs = [json.loads(line) for line in Path(args.chat).read_text(encoding="utf-8").splitlines() if line.strip()]
     print(f"{len(pairs)} chat pairs, vocab {tokenizer.size}")

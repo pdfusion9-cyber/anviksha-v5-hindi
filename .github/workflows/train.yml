@@ -41,11 +41,13 @@ jobs:
           print(f"clock {b.clock_ghz:.3f} GHz via {b.clock_source}")
           PY
 
+      - name: Fetch Hindi text for pretraining
+        run: python src/fetch_text.py --out hindi_corpus.txt --chars 2000000
+
       - name: Pretrain on Hindi text
         run: |
-          curl -sL "https://huggingface.co/datasets/wikimedia/wikipedia/resolve/main/README.md" -o /dev/null || true
           python src/train.py --stage pretrain --dim 128 --layers 3 --ffn 512 \
-            --seq-len 128 --batch 16 --steps 300 --time-budget 900 || true
+            --seq-len 128 --batch 16 --steps 300 --time-budget 900
 
       - name: Chat fine-tune, clock-bound
         run: |
