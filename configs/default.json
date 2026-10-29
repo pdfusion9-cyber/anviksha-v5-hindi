@@ -1,0 +1,19 @@
+{
+  "base": "FabricAI_HybridV5 (unchanged original)",
+  "corrections": {
+    "tokenizer": {"from": "utf-8 bytes, vocab 227", "to": "devanagari chars, vocab 429"},
+    "d_model": {"from": 64, "to": 128},
+    "data": {"from": "code bytes only", "to": "hindi text then chat format"},
+    "chat_template": {"from": null, "to": "<bos><user>..<sep><assistant>..<eos>"},
+    "dropout": {"from": 0, "to": 0.1},
+    "output_screening": {"from": null, "to": "decency + degeneracy filter"}
+  },
+  "training": {
+    "parameters": 664832, "layers": 3, "dim": 128, "heads": 4, "ffn": 512, "seq_len": 128,
+    "pretrain": {"chars": 2000000, "steps": 200, "perplexity_before": 108.9, "perplexity_after": 49.4},
+    "chat": {"pairs": 60, "steps": 150, "loss_before": 3.52, "loss_after": 2.47}
+  },
+  "generation": {"temperature": 0.8, "top_k": 20, "verdict": "word salad; 350 total steps is far below what is needed"},
+  "safety_screen": {"checks": ["empty", "template_leak", "abusive_language", "degenerate_repetition", "low_content"],
+                    "flagged": 2, "of": 6}
+}
