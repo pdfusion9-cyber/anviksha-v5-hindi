@@ -1,0 +1,70 @@
+name: train-hindi-chat
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_steps:
+        description: "step ceiling (the clock budget may lower it)"
+        required: true
+        default: "10000"
+      clock_budget_minutes:
+        description: "wall-clock budget in minutes, bound to the measured CPU clock"
+        required: true
+        default: "300"
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy pyarrow pillow
+
+      - name: Fetch Hindi instruction data
+        run: python src/fetch_chat.py --target 8000 --held-out 400
+
+      - name: Report CPU clock
+        run: |
+          python - <<'PY'
+          import sys; sys.path.insert(0, "src")
+          from clock import make_budget
+          b = make_budget(60)
+          print(f"clock {b.clock_ghz:.3f} GHz via {b.clock_source}")
+          PY
+
+      - name: Pretrain on Hindi text
+        run: |
+          curl -sL "https://huggingface.co/datasets/wikimedia/wikipedia/resolve/main/README.md" -o /dev/null || true
+          python src/train.py --stage pretrain --dim 128 --layers 3 --ffn 512 \
+            --seq-len 128 --batch 16 --steps 300 --time-budget 900 || true
+
+      - name: Chat fine-tune, clock-bound
+        run: |
+          python src/train.py --stage chat --dim 128 --layers 3 --ffn 512 \
+            --seq-len 128 --batch 8 --lr 6e-4 \
+            --target-steps ${{ inputs.target_steps }} \
+            --clock-budget-minutes ${{ inputs.clock_budget_minutes }}
+
+      - name: Held-out evaluation and safety screen
+        run: python src/eval_chat.py --limit 200 --generate 30 || true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-hindi-run
+          path: |
+            runs/chat.pt
+            runs/eval.json
+            runs/clock_report.json
+            runs/tokenizer.json
+          retention-days: 30

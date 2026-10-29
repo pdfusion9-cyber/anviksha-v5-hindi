@@ -122,3 +122,36 @@ data/chat_seed.jsonl   60 hand-written Hindi pairs
    sentences — that is when decency screening starts to matter.
 
 Until then, any claim that this copy "talks in Hindi" would be false.
+
+
+## Clock-bound training
+
+A fixed "10,000 steps" means different things on different machines. The run is
+therefore bound to the CPU clock, and two numbers are measured rather than
+assumed:
+
+- **clock speed** — read from `/proc/cpuinfo`, or calibrated from a tight loop
+  when the container hides it;
+- **steps per second** — timed on the real model, batch and data path, over the
+  first 15 steps.
+
+The step target is then `min(target_steps, steps_per_second × budget_seconds)`.
+A slow machine stops at the budget with fewer steps; a fast one reaches the
+target and stops early. `runs/clock_report.json` records what actually happened.
+
+Measured on this 2-core container:
+
+| | |
+|---|---|
+| Clock | 2.532 GHz (`cpuinfo`) |
+| Throughput | 1.576 steps/s |
+| 3-minute budget | planned 283 steps, completed 283 in 204 s |
+| **10,000 steps** | **105.8 min ≈ 1.76 h, 16.1 Tcycles** |
+
+A GitHub Actions runner (2 vCPU, 6 h limit) fits roughly 34,000 steps, so the
+10,000-step target completes in a single job with room to spare.
+
+```bash
+python src/train.py --stage chat --target-steps 10000 --clock-budget-minutes 300
+gh workflow run train-hindi-chat -f target_steps=10000 -f clock_budget_minutes=300
+```
