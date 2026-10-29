@@ -25,55 +25,55 @@ FFN, tied output head.
 
 | Stage | Data | Steps | Result |
 |---|---|---|---|
-| Pretrain | 2 M characters of Hindi Wikipedia | 200 | perplexity 108.9 → **49.4** |
-| Chat fine-tune | 60 hand-written Hindi pairs | 150 | loss 3.52 → **2.47** |
+| Pretrain | 2 M characters of Hindi Wikipedia | 200 | perplexity 108.9 → 49.4 |
+| Chat fine-tune (seed) | 60 hand-written pairs | 150 | loss 3.52 → 2.47 |
+| Chat fine-tune (real) | **7,600 pairs** from `smangrul/hindi_instruct_v1` (MIT) | ~400 | loss 3.49 → **2.20** |
 
 Model: 664,832 parameters, 3 layers, dim 128. Two CPU cores.
 
-**60 chat pairs is a seed, not a dataset.** It is included so the format and the
-evaluation are reproducible, not because it is enough to teach conversation.
+The dataset step is the one that actually moved: `src/fetch_chat.py` pulls a
+13 MB parquet, extracts 11,163 usable unique pairs after length filtering and
+deduplication, and writes a **7,600-pair training split and a 400-pair held-out
+split, carved out before any training**.
 
-## The generations, unedited
+## Held-out evaluation
 
-Sampled at temperature 0.8, top-k 20, from the chat checkpoint:
+This is the number that matters, and it is not the loss curve.
+
+| Metric | Value |
+|---|---|
+| Train perplexity (200 pairs) | 7.71 |
+| **Held-out perplexity (200 pairs)** | **8.04** |
+| Overfit gap | **+0.32** |
+| Generations screened | 30 |
+| Flagged by the safety screen | 3 (all `empty`) |
+
+**A gap of 0.32 means the model is underfitting, not overfitting.** It has not
+memorised the 7,600 pairs; it has not yet learned them. That is a useful
+diagnosis: the bottleneck is optimisation steps and capacity, not regularisation
+and not data volume. Adding more data would not help until the model can fit
+what it already has.
+
+### The generations, unedited
+
+Sampled at temperature 0.7, top-k 20, from held-out prompts:
 
 ```
-U: नमस्ते
-A: कत पराया है।मिनहैंकत ल हिं हैनहै?मे
+U: Tiramisu is my favorite dessert. Where does it originate from?
+A: Saaliy the kay ae sha ke ke t karaate ke he ki
 
-U: आपका नाम क्या है?
-A: पतात बातार मे कि ब बता ब।
+U: What planet has the most moons? Hindi mein jawab dena.
+A: SSehais painste me kaan kar e t har kaaiea k k
 
-U: आप कैसे हैं?
-A: नहिखा।मे हैंद हैं कर है। र क बाइरेर हि
-
-U: भारत की राजधानी क्या है?
-A: मने है।
-
-U: मुझे उदासी है।
-A: मे स।मस्यात को र ही हूँ। का कोता ना बा      [FLAG: low_content]
-
-U: धन्यवाद
-A: क सा ही है।हूँ।नक्या।                        [FLAG: low_content]
+U: Bertie, I'm having such a bad day. Translation of the above into Hindi
+A: न कें ka सe म क0
 ```
 
-This is word salad. It is recognisably Devanagari, it has learned the sentence
-terminator `।`, the copula `है`, and the first-person `हूँ` — and nothing else
-holds together.
-
-### Why, stated plainly
-
-- **350 total optimisation steps.** A model needs orders of magnitude more.
-  V5 itself ran three generations over 12,841 records on a phone; that is a
-  larger budget than this run, and V5 also could not converse.
-- **60 chat pairs.** The fine-tune can only memorise the surface form of a
-  conversation, not learn to answer.
-- **665 k parameters.** Roughly 1/1000th of the 100 MB target discussed earlier
-  (200 M at 4-bit).
-
-The corrections removed the *structural* blockers — byte tokenisation, missing
-turn markers, code-only data. What remains is a compute and data gap, and no
-architecture change closes that.
+Still not Hindi conversation. Note what the held-out set actually contains: many
+of these prompts are translation and transliteration tasks written in Latin
+script, which is why the model's output drifts into Latin characters. The seed
+set was clean Hindi chat; this corpus is broader and harder, and the model is
+far too small for it.
 
 ## Safety screening — what it does and does not do
 
@@ -82,7 +82,10 @@ degenerate repetition, and low alphanumeric content. It also carries a short
 list of unambiguous abusive Hindi words, deliberately small to avoid false
 positives.
 
-It caught the two degenerate replies above. It **cannot** catch a fluent but
+On the 30 held-out generations it flagged 3 — all of them `empty`, meaning the
+model emitted an end-of-sequence token immediately. No abusive or leaking output
+appeared, but that is because the model produces almost no fluent text at all,
+not because it has been taught to be safe. It **cannot** catch a fluent but
 wrong or harmful answer — that requires a model that can produce fluent answers,
 which this one cannot. Screening is a filter on output, not a substitute for
 training the behaviour in.
@@ -110,10 +113,11 @@ data/chat_seed.jsonl   60 hand-written Hindi pairs
 
 ## What would actually fix it
 
-1. **100× the chat data.** Thousands of Hindi instruction-response pairs, not 60.
-2. **100× the steps**, on a GPU or a long Actions run. This is a compute gap.
-3. **Evaluate on held-out prompts**, not the six above. A 6-prompt read is a
-   sanity check, not an evaluation.
+1. ~~100× the chat data~~ — **done**: 7,600 pairs, 126× the seed set.
+2. **100× the steps**, on a GPU or a long Actions run. The +0.32 overfit gap
+   shows this is now the binding constraint.
+3. ~~Evaluate on held-out prompts~~ — **done**: `src/eval_chat.py`, 400 held-out
+   pairs, perplexity and screened generations.
 4. **Then re-run the safety screen** on a model that can actually produce
    sentences — that is when decency screening starts to matter.
 
