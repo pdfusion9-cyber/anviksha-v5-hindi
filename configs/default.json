@@ -95,5 +95,19 @@
     "steps_completed": 10000,
     "wall_clock_seconds": 508,
     "stopped_on": "step target, not time budget"
+  },
+  "model_19m": {
+    "dim": 512,
+    "layers": 6,
+    "heads": 4,
+    "ffn": 2048,
+    "seq_len": 128,
+    "parameters": 19313664,
+    "size_mb": {
+      "fp32": 77.3,
+      "int8": 19.3,
+      "int4": 9.7
+    },
+    "note": "fits the 100 MB budget even at fp32; 200M would fit at int4"
   }
 }

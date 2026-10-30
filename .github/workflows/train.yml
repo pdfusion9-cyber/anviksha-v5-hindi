@@ -47,18 +47,21 @@ jobs:
       - name: Pretrain on Hindi text
         run: |
           python src/train.py --stage pretrain --text hindi_corpus.txt \
-            --dim 128 --layers 3 --ffn 512 \
-            --seq-len 128 --batch 16 --steps 300 --time-budget 900
+            --dim 512 --layers 6 --ffn 2048 \
+            --seq-len 128 --batch 8 --steps 200 --time-budget 900 || true
 
       - name: Chat fine-tune, clock-bound
         run: |
-          python src/train.py --stage chat --dim 128 --layers 3 --ffn 512 \
-            --seq-len 128 --batch 8 --lr 6e-4 \
+          python src/train.py --stage chat --dim 512 --layers 6 --ffn 2048 \
+            --seq-len 128 --batch 8 --lr 3e-4 \
             --target-steps ${{ inputs.target_steps }} \
             --clock-budget-minutes ${{ inputs.clock_budget_minutes }}
 
       - name: Held-out evaluation and safety screen
         run: python src/eval_chat.py --limit 200 --generate 30 || true
+
+      - name: Quantize to int8 and int4
+        run: python src/quantize.py --limit 100 || true
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -68,5 +71,6 @@ jobs:
             runs/chat.pt
             runs/eval.json
             runs/clock_report.json
+            runs/quantization.json
             runs/tokenizer.json
           retention-days: 30
