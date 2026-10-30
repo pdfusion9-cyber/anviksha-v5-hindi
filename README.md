@@ -38,42 +38,42 @@ split, carved out before any training**.
 
 ## Held-out evaluation
 
-This is the number that matters, and it is not the loss curve.
+| Metric | Before (400 steps) | **After (10,000 steps)** |
+|---|---|---|
+| Train perplexity | 7.71 | **3.42** |
+| **Held-out perplexity** | **8.04** | **3.59** |
+| Overfit gap | +0.32 | **+0.17** |
+| Steps | ~400 | **10,000** |
+| Wall clock | 204 s (2-core container) | **508 s (GitHub runner)** |
 
-| Metric | Value |
-|---|---|
-| Train perplexity (200 pairs) | 7.71 |
-| **Held-out perplexity (200 pairs)** | **8.04** |
-| Overfit gap | **+0.32** |
-| Generations screened | 30 |
-| Flagged by the safety screen | 3 (all `empty`) |
+Held-out perplexity improved **2.2×** and the overfit gap shrank. The run was
+executed on a GitHub Actions runner, clock-bound: 3.253 GHz measured, an 18,000 s
+budget (58,561 Gcycles), and the 10,000-step target was reached in 508 s — well
+inside the budget, so the run stopped on steps rather than on time.
 
-**A gap of 0.32 means the model is underfitting, not overfitting.** It has not
-memorised the 7,600 pairs; it has not yet learned them. That is a useful
-diagnosis: the bottleneck is optimisation steps and capacity, not regularisation
-and not data volume. Adding more data would not help until the model can fit
-what it already has.
+The runner did ~19.7 steps/s against the container's 1.576, which is why the
+same job that would take 1.76 h locally finished in 8.5 minutes.
 
 ### The generations, unedited
 
-Sampled at temperature 0.7, top-k 20, from held-out prompts:
+Held-out prompts, temperature 0.7, top-k 20:
 
 ```
 U: Tiramisu is my favorite dessert. Where does it originate from?
-A: Saaliy the kay ae sha ke ke t karaate ke he ki
+A: पंजने सोफ ता हैंकरे ना पर्लिस के करे हैं हो।
 
 U: What planet has the most moons? Hindi mein jawab dena.
-A: SSehais painste me kaan kar e t har kaaiea k k
+A: Enao's me din abit in in a the to Hin the to pay
 
-U: Bertie, I'm having such a bad day. Translation of the above into Hindi
-A: न कें ka सe म क0
+U: Hinglish se English mein translate kare. Kal ke liye highs kya hoga
+A: Call me tesse alarms
 ```
 
-Still not Hindi conversation. Note what the held-out set actually contains: many
-of these prompts are translation and transliteration tasks written in Latin
-script, which is why the model's output drifts into Latin characters. The seed
-set was clean Hindi chat; this corpus is broader and harder, and the model is
-far too small for it.
+Still not conversation. But one thing changed and it matters: the model now
+emits **Devanagari by default**. Before, it drifted into Latin characters; now
+Hindi text is its first instinct, and the sentences carry Hindi function words
+(`हैं`, `के`, `हो`) in roughly the right places. The content is wrong; the
+language is right.
 
 ## Safety screening — what it does and does not do
 

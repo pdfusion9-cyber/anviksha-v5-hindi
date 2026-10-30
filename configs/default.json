@@ -41,9 +41,9 @@
     },
     "chat": {
       "pairs": 7600,
-      "steps": 400,
+      "steps": 10000,
       "loss_before": 3.49,
-      "loss_after": 2.2
+      "loss_after": 1.28
     }
   },
   "generation": {
@@ -75,9 +75,25 @@
     "heldout_pairs": 400
   },
   "evaluation": {
-    "train_perplexity": 7.71,
-    "heldout_perplexity": 8.04,
-    "overfit_gap": 0.32,
-    "verdict": "underfitting; more steps needed, not more data"
+    "train_perplexity": 3.42,
+    "heldout_perplexity": 3.59,
+    "overfit_gap": 0.17,
+    "before": {
+      "train": 7.71,
+      "heldout": 8.04,
+      "gap": 0.32,
+      "steps": 400
+    },
+    "improvement": "held-out perplexity 2.2x better"
+  },
+  "clock_bound_run": {
+    "platform": "github actions ubuntu-latest",
+    "clock_ghz": 3.253,
+    "budget_seconds": 18000,
+    "budget_giga_cycles": 58560.6,
+    "measured_steps_per_second": 19.7,
+    "steps_completed": 10000,
+    "wall_clock_seconds": 508,
+    "stopped_on": "step target, not time budget"
   }
 }
