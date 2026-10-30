@@ -1,0 +1,13 @@
+{
+  "unseen_dataset": "ai4bharat/indic-instruct-data-v0.1 (dolly, hi)",
+  "training_dataset": "smangrul/hindi_instruct_v1",
+  "rows_in_corpus": 15011,
+  "rows_that_fit_window": 200,
+  "pairs_scored": 200,
+  "tokens_scored": 15579,
+  "unseen_perplexity": 13.789,
+  "window_chars": [
+    60,
+    60
+  ]
+}

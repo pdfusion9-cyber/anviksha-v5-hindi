@@ -189,5 +189,15 @@
       "delta": 99.215,
       "verdict": "structural failure; needs group-wise quantization"
     }
+  },
+  "generalisation": {
+    "same_dataset_heldout_perplexity": 3.35,
+    "unseen_corpus_perplexity": 13.789,
+    "unseen_corpus": "ai4bharat/indic-instruct-data-v0.1 (dolly, hi)",
+    "training_corpus": "smangrul/hindi_instruct_v1",
+    "ratio": 4.1,
+    "rows_in_unseen_corpus": 15011,
+    "rows_that_fit_128_char_window": 1678,
+    "verdict": "the model memorised one corpus's style; it does not generalise yet"
   }
 }

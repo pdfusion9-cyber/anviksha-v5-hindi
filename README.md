@@ -86,6 +86,32 @@ structural — one scale per weight matrix cannot represent these weights — an
 will not be fixed by trying again. Group-wise quantization (one scale per 32–128
 weights) is the required fix.
 
+## Generalisation: the number that matters most
+
+Held-out perplexity of 3.35 came from the **same dataset** the model trained on
+(smangrul/hindi_instruct_v1), just a different slice. That measures memory, not
+generalisation.
+
+So the checkpoint was scored on a corpus it has never seen:
+**ai4bharat/indic-instruct-data-v0.1 (Dolly, Hindi)** — a different corpus with a
+different translation pipeline.
+
+| Evaluation set | Perplexity |
+|---|---|
+| Same-dataset held-out (400 pairs) | 3.35 |
+| **Unseen corpus, different source (200 pairs)** | **13.79** |
+
+**4.1× worse on data it has never seen.** That is the real generalisation
+number, and it changes the priority completely: the model has learned the
+surface style of one corpus, not Hindi conversation in general.
+
+Only 1,678 of 15,011 Dolly rows fit the model's 128-character window (its answers
+are long), so this is measured on short pairs — the comparison is like-for-like
+with training data, which makes the 13.79 harder to explain away, not easier.
+
+`src/eval_unseen.py` reproduces this and reports how many rows were dropped by
+the window, so the filtering cannot quietly flatter the result.
+
 ## Safety screening — what it does and does not do
 
 `src/safety.py` flags four things: empty output, template-token leakage,
