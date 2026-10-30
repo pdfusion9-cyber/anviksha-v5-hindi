@@ -30,7 +30,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Fetch Hindi instruction data
-        run: python src/fetch_chat.py --target 0 --held-out 400
+        run: python src/fetch_multi.py
 
       - name: Report CPU clock
         run: |
@@ -54,11 +54,15 @@ jobs:
         run: |
           python src/train.py --stage chat --dim 640 --layers 8 --ffn 2560 \
             --seq-len 128 --batch 8 --lr 3e-4 \
+            --chat data/multi_train.jsonl \
             --target-steps ${{ inputs.target_steps }} \
             --clock-budget-minutes ${{ inputs.clock_budget_minutes }}
 
       - name: Held-out evaluation and safety screen
-        run: python src/eval_chat.py --limit 200 --generate 30 || true
+        run: python src/eval_chat.py --heldout data/multi_heldout.jsonl --limit 200 --generate 30 || true
+
+      - name: Evaluate on an unseen source (hh-rlhf, never trained on)
+        run: python src/eval_unseen.py --parquet data/unseen_hh.jsonl --limit 200 || true
 
       - name: Quantize to int8 and int4
         run: python src/quantize.py --limit 100 || true
@@ -72,5 +76,6 @@ jobs:
             runs/eval.json
             runs/clock_report.json
             runs/quantization.json
+            runs/unseen_eval.json
             runs/tokenizer.json
           retention-days: 30

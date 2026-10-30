@@ -199,5 +199,19 @@
     "rows_in_unseen_corpus": 15011,
     "rows_that_fit_128_char_window": 1678,
     "verdict": "the model memorised one corpus's style; it does not generalise yet"
+  },
+  "multi_source_run": {
+    "sources": {
+      "smangrul": 7687,
+      "dolly": 4956,
+      "anudesh": 134
+    },
+    "combined_dedup": 12765,
+    "train": 12265,
+    "heldout": 500,
+    "unseen_source": "hh-rlhf/hi",
+    "unseen_pairs": 1354,
+    "baseline_old_checkpoint_unseen_ppl": 7.898,
+    "target": "beat 7.898 on the same unseen source"
   }
 }

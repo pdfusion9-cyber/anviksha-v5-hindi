@@ -28,6 +28,11 @@ from tokenizer import CharTokenizer  # noqa: E402
 
 
 def load_unseen(path: Path, max_prompt: int, max_reply: int) -> tuple[list[dict], int]:
+    if path.suffix == ".jsonl":
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        kept = [r for r in rows
+                if 4 <= len(r["user"]) <= max_prompt and 4 <= len(r["assistant"]) <= max_reply]
+        return kept, len(rows)
     handle = pq.ParquetFile(path, memory_map=True)
     total = 0
     pairs: list[dict] = []
@@ -66,7 +71,7 @@ def perplexity(model, tok, pairs, seq_len, batch=2) -> tuple[float, int, int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--parquet", default="/tmp/dolly_hi.parquet", type=Path)
+    parser.add_argument("--parquet", default="cache/dolly.parquet", type=Path)
     parser.add_argument("--checkpoint", default="artifact/chat.pt", type=Path)
     parser.add_argument("--out", default="runs/unseen_eval.json", type=Path)
     parser.add_argument("--limit", default=400, type=int)
