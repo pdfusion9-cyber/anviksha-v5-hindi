@@ -108,6 +108,38 @@
       "int8": 19.3,
       "int4": 9.7
     },
-    "note": "fits the 100 MB budget even at fp32; 200M would fit at int4"
+    "note": "fits the 100 MB budget even at fp32; 200M would fit at int4",
+    "parameters_measured": 19065856,
+    "steps": 6000,
+    "wall_clock_seconds": 4968,
+    "train_perplexity": 3.59,
+    "heldout_perplexity": 3.8,
+    "overfit_gap": 0.2,
+    "verdict": "larger model did not help at 6000 steps and 7600 pairs"
+  },
+  "quantization": {
+    "fp32": {
+      "mb": 76.26,
+      "perplexity": 3.766
+    },
+    "int8": {
+      "mb": 19.25,
+      "perplexity": 3.773,
+      "delta": 0.006,
+      "verdict": "free"
+    },
+    "int4_per_tensor": {
+      "mb": 9.68,
+      "perplexity": 79.695,
+      "delta": 75.929,
+      "verdict": "catastrophic; needs group-wise quantization"
+    }
+  },
+  "clock_bound_run_19m": {
+    "clock_ghz": 3.244,
+    "budget_giga_cycles": 46712.2,
+    "measured_steps_per_second": 1.19,
+    "steps_completed": 6000,
+    "wall_clock_seconds": 4968
   }
 }

@@ -36,44 +36,55 @@ The dataset step is the one that actually moved: `src/fetch_chat.py` pulls a
 deduplication, and writes a **7,600-pair training split and a 400-pair held-out
 split, carved out before any training**.
 
-## Held-out evaluation
+## Two models, measured
 
-| Metric | Before (400 steps) | **After (10,000 steps)** |
+| | Small | **Large** |
 |---|---|---|
-| Train perplexity | 7.71 | **3.42** |
-| **Held-out perplexity** | **8.04** | **3.59** |
-| Overfit gap | +0.32 | **+0.17** |
-| Steps | ~400 | **10,000** |
-| Wall clock | 204 s (2-core container) | **508 s (GitHub runner)** |
+| Parameters | 664,832 | **19,065,856** |
+| dim / layers / ffn | 128 / 3 / 512 | **512 / 6 / 2048** |
+| Steps | 10,000 | 6,000 |
+| Wall clock | 508 s | 4,968 s (83 min) |
+| Train perplexity | 3.42 | 3.59 |
+| **Held-out perplexity** | **3.59** | **3.80** |
+| Overfit gap | +0.17 | +0.20 |
+| fp32 size | 2.7 MB | 76.26 MB |
 
-Held-out perplexity improved **2.2×** and the overfit gap shrank. The run was
-executed on a GitHub Actions runner, clock-bound: 3.253 GHz measured, an 18,000 s
-budget (58,561 Gcycles), and the 10,000-step target was reached in 508 s — well
-inside the budget, so the run stopped on steps rather than on time.
+**The 29× larger model did not improve held-out perplexity.** It got slightly
+worse (3.80 vs 3.59). The reason is arithmetic, not mystery: it trained for
+6,000 steps instead of 10,000, at 1.19 steps/s against the small model's 19.7,
+and 7,600 conversation pairs is a very small diet for 19 M parameters. Capacity
+without matching data and steps buys nothing — which is exactly what the
++0.20 gap says.
 
-The runner did ~19.7 steps/s against the container's 1.576, which is why the
-same job that would take 1.76 h locally finished in 8.5 minutes.
+## Quantization: what it actually costs
 
-### The generations, unedited
+| Variant | Size | Held-out perplexity | Change |
+|---|---|---|---|
+| fp32 | 76.26 MB | 3.766 | — |
+| **int8** | **19.25 MB** | **3.773** | **+0.006** |
+| int4 (per-tensor) | 9.68 MB | 79.695 | **+75.9** |
 
-Held-out prompts, temperature 0.7, top-k 20:
+**int8 is free**: 4× smaller for a perplexity change of 0.006. That is the
+practical result of this round — a 19 M-parameter Hindi model that runs in
+19 MB.
 
-```
-U: Tiramisu is my favorite dessert. Where does it originate from?
-A: पंजने सोफ ता हैंकरे ना पर्लिस के करे हैं हो।
+**Naive int4 destroys the model.** One scale for an entire weight matrix means
+outliers set the scale and the remaining values collapse into a few buckets. The
+fix is group-wise quantization (one scale per 32–128 weights, as GPTQ and AWQ
+do), which this repository does not implement yet. Reporting int4 as "4× smaller
+than int8, quality preserved" would have been false, so it is reported as it is.
 
-U: What planet has the most moons? Hindi mein jawab dena.
-A: Enao's me din abit in in a the to Hin the to pay
+## The 100 MB budget, settled
 
-U: Hinglish se English mein translate kare. Kal ke liye highs kya hoga
-A: Call me tesse alarms
-```
+| Model | fp32 | int8 | int4 |
+|---|---|---|---|
+| 665 k | 2.7 MB | 0.7 MB | 0.3 MB |
+| 19.1 M | 76.3 MB | 19.3 MB | 9.7 MB |
+| 200 M (projected) | 800 MB | 200 MB | 100 MB |
 
-Still not conversation. But one thing changed and it matters: the model now
-emits **Devanagari by default**. Before, it drifted into Latin characters; now
-Hindi text is its first instinct, and the sentences carry Hindi function words
-(`हैं`, `के`, `हो`) in roughly the right places. The content is wrong; the
-language is right.
+A 19 M model fits 100 MB even at fp32. Reaching 200 M parameters inside 100 MB
+requires working int4, and this round shows naive int4 does not work. Group-wise
+quantization is the next required step, not an optional optimisation.
 
 ## Safety screening — what it does and does not do
 
