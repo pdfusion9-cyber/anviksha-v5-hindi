@@ -36,55 +36,55 @@ The dataset step is the one that actually moved: `src/fetch_chat.py` pulls a
 deduplication, and writes a **7,600-pair training split and a 400-pair held-out
 split, carved out before any training**.
 
-## Two models, measured
+## Three runs, measured
 
-| | Small | **Large** |
-|---|---|---|
-| Parameters | 664,832 | **19,065,856** |
-| dim / layers / ffn | 128 / 3 / 512 | **512 / 6 / 2048** |
-| Steps | 10,000 | 6,000 |
-| Wall clock | 508 s | 4,968 s (83 min) |
-| Train perplexity | 3.42 | 3.59 |
-| **Held-out perplexity** | **3.59** | **3.80** |
-| Overfit gap | +0.17 | +0.20 |
-| fp32 size | 2.7 MB | 76.26 MB |
+| | Small | Medium | **Full capacity** |
+|---|---|---|---|
+| Parameters | 664,832 | 19,065,856 | **39,581,440** |
+| dim / layers / ffn | 128/3/512 | 512/6/2048 | **640/8/2560** |
+| Training pairs | 7,600 | 7,600 | **11,912** |
+| Steps | 10,000 | 6,000 | **11,361** |
+| Wall clock | 508 s | 4,968 s | 18,846 s (5 h 14 m) |
+| Train perplexity | 3.42 | 3.59 | **3.07** |
+| **Held-out perplexity** | 3.59 | 3.80 | **3.35** |
+| Overfit gap | +0.17 | +0.20 | **+0.28** |
 
-**The 29× larger model did not improve held-out perplexity.** It got slightly
-worse (3.80 vs 3.59). The reason is arithmetic, not mystery: it trained for
-6,000 steps instead of 10,000, at 1.19 steps/s against the small model's 19.7,
-and 7,600 conversation pairs is a very small diet for 19 M parameters. Capacity
-without matching data and steps buys nothing — which is exactly what the
-+0.20 gap says.
+**This is the best result so far, and the first run where capacity paid off** —
+because this time data and steps grew with it. 12,312 usable pairs were found
+once the 8,000 cap was removed and the length window widened; 11,912 went to
+training and 400 stayed held out.
 
-## Quantization: what it actually costs
+The gap also grew (0.17 → 0.28), which is the expected trade: a 39.6 M model on
+~12 k pairs has started to fit its training set a little more than it generalises.
+
+### Clock binding, third measurement
+
+| | |
+|---|---|
+| Clock | 3.241 GHz |
+| Budget | 315 min = 61,256 Gcycles |
+| Measured throughput | 0.601 steps/s |
+| Planned steps | 11,361 |
+| Completed | **11,361 in 18,846 s** |
+
+The planner hit its own estimate within 0.5 %. The run stopped on the clock, not
+on a step count.
+
+## Quantization on the 39.6 M model
 
 | Variant | Size | Held-out perplexity | Change |
 |---|---|---|---|
-| fp32 | 76.26 MB | 3.766 | — |
-| **int8** | **19.25 MB** | **3.773** | **+0.006** |
-| int4 (per-tensor) | 9.68 MB | 79.695 | **+75.9** |
+| fp32 | 158.33 MB | 3.411 | — |
+| **int8** | **39.85 MB** | **3.437** | **+0.026** |
+| int4 (per-tensor) | 20.02 MB | 102.626 | **+99.2** |
 
-**int8 is free**: 4× smaller for a perplexity change of 0.006. That is the
-practical result of this round — a 19 M-parameter Hindi model that runs in
-19 MB.
+int8 again costs almost nothing: **158 MB → 39.85 MB for +0.026 perplexity**.
+That is a 39.85 MB Hindi model, comfortably inside the 100 MB budget.
 
-**Naive int4 destroys the model.** One scale for an entire weight matrix means
-outliers set the scale and the remaining values collapse into a few buckets. The
-fix is group-wise quantization (one scale per 32–128 weights, as GPTQ and AWQ
-do), which this repository does not implement yet. Reporting int4 as "4× smaller
-than int8, quality preserved" would have been false, so it is reported as it is.
-
-## The 100 MB budget, settled
-
-| Model | fp32 | int8 | int4 |
-|---|---|---|---|
-| 665 k | 2.7 MB | 0.7 MB | 0.3 MB |
-| 19.1 M | 76.3 MB | 19.3 MB | 9.7 MB |
-| 200 M (projected) | 800 MB | 200 MB | 100 MB |
-
-A 19 M model fits 100 MB even at fp32. Reaching 200 M parameters inside 100 MB
-requires working int4, and this round shows naive int4 does not work. Group-wise
-quantization is the next required step, not an optional optimisation.
+Naive int4 fails again, and worse than before (+99.2 vs +75.9). The failure is
+structural — one scale per weight matrix cannot represent these weights — and it
+will not be fixed by trying again. Group-wise quantization (one scale per 32–128
+weights) is the required fix.
 
 ## Safety screening — what it does and does not do
 

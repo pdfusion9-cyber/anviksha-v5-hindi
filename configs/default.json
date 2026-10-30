@@ -59,11 +59,11 @@
       "degenerate_repetition",
       "low_content"
     ],
-    "flagged": 3,
+    "flagged": 5,
     "of": 6,
     "screened": 30,
     "issues": {
-      "empty": 3
+      "empty": 5
     }
   },
   "chat_dataset": {
@@ -157,6 +157,37 @@
     "data": "every usable pair, no target cap, wider length window",
     "clock_budget_minutes": 315,
     "estimated_steps_per_second": 0.57,
-    "estimated_steps": 11267
+    "estimated_steps": 11267,
+    "parameters_measured": 39581440,
+    "usable_pairs": 12312,
+    "train_pairs": 11912,
+    "heldout_pairs": 400,
+    "steps_completed": 11361,
+    "wall_clock_seconds": 18846,
+    "measured_steps_per_second": 0.601,
+    "clock_ghz": 3.241,
+    "budget_giga_cycles": 61255.7,
+    "train_perplexity": 3.07,
+    "heldout_perplexity": 3.35,
+    "overfit_gap": 0.28,
+    "verdict": "best result so far; capacity paid off once data and steps grew with it"
+  },
+  "quantization_39m": {
+    "fp32": {
+      "mb": 158.33,
+      "perplexity": 3.411
+    },
+    "int8": {
+      "mb": 39.85,
+      "perplexity": 3.437,
+      "delta": 0.026,
+      "verdict": "essentially free"
+    },
+    "int4_per_tensor": {
+      "mb": 20.02,
+      "perplexity": 102.626,
+      "delta": 99.215,
+      "verdict": "structural failure; needs group-wise quantization"
+    }
   }
 }
