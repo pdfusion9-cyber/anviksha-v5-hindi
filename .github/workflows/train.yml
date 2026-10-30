@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       target_steps:
-        description: "step ceiling (the clock budget may lower it)"
+        description: "step ceiling (0 = let the clock budget decide)"
         required: true
-        default: "10000"
+        default: "0"
       clock_budget_minutes:
         description: "wall-clock budget in minutes, bound to the measured CPU clock"
         required: true
-        default: "300"
+        default: "315"
 
 jobs:
   train:
@@ -30,7 +30,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Fetch Hindi instruction data
-        run: python src/fetch_chat.py --target 8000 --held-out 400
+        run: python src/fetch_chat.py --target 0 --held-out 400
 
       - name: Report CPU clock
         run: |
@@ -47,12 +47,12 @@ jobs:
       - name: Pretrain on Hindi text
         run: |
           python src/train.py --stage pretrain --text hindi_corpus.txt \
-            --dim 512 --layers 6 --ffn 2048 \
+            --dim 640 --layers 8 --ffn 2560 \
             --seq-len 128 --batch 8 --steps 200 --time-budget 900 || true
 
       - name: Chat fine-tune, clock-bound
         run: |
-          python src/train.py --stage chat --dim 512 --layers 6 --ffn 2048 \
+          python src/train.py --stage chat --dim 640 --layers 8 --ffn 2560 \
             --seq-len 128 --batch 8 --lr 3e-4 \
             --target-steps ${{ inputs.target_steps }} \
             --clock-budget-minutes ${{ inputs.clock_budget_minutes }}

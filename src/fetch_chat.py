@@ -52,10 +52,10 @@ def extract_pairs(path: Path, max_reply: int, max_prompt: int) -> list[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--target", default=8000, type=int)
+    parser.add_argument("--target", default=0, type=int, help="0 = use every usable pair")
     parser.add_argument("--held-out", default=400, type=int)
-    parser.add_argument("--max-reply", default=220, type=int)
-    parser.add_argument("--max-prompt", default=160, type=int)
+    parser.add_argument("--max-reply", default=320, type=int)
+    parser.add_argument("--max-prompt", default=220, type=int)
     parser.add_argument("--out", default="data", type=Path)
     args = parser.parse_args()
 
@@ -64,7 +64,8 @@ def main() -> None:
     print(f"{len(pairs)} usable unique pairs")
 
     random.Random(0).shuffle(pairs)
-    pairs = pairs[: args.target]
+    if args.target:
+        pairs = pairs[: args.target]
     held = pairs[: args.held_out]
     train = pairs[args.held_out :]
 

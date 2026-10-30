@@ -141,5 +141,22 @@
     "measured_steps_per_second": 1.19,
     "steps_completed": 6000,
     "wall_clock_seconds": 4968
+  },
+  "full_capacity_run": {
+    "dim": 640,
+    "layers": 8,
+    "heads": 4,
+    "ffn": 2560,
+    "seq_len": 128,
+    "parameters": 39870720,
+    "size_mb": {
+      "fp32": 159.5,
+      "int8": 39.9,
+      "int4": 19.9
+    },
+    "data": "every usable pair, no target cap, wider length window",
+    "clock_budget_minutes": 315,
+    "estimated_steps_per_second": 0.57,
+    "estimated_steps": 11267
   }
 }
