@@ -60,12 +60,20 @@ def from_messages(path: Path, source: str, max_prompt: int, max_reply: int, cap:
 
 
 def from_columns(path: Path, source: str, max_prompt: int, max_reply: int, cap: int = 12000) -> list[dict]:
+    """Handles both column namings in use: instruction/response and inputs/targets."""
     pairs, seen = [], set()
     handle = pq.ParquetFile(path)
-    for batch in handle.iter_batches(batch_size=128, columns=["instruction", "response"]):
+    names = set(handle.schema_arrow.names)
+    if {"instruction", "response"} <= names:
+        prompt_col, reply_col = "instruction", "response"
+    elif {"inputs", "targets"} <= names:
+        prompt_col, reply_col = "inputs", "targets"
+    else:
+        raise KeyError(f"no known prompt/reply columns in {sorted(names)}")
+    for batch in handle.iter_batches(batch_size=128, columns=[prompt_col, reply_col]):
         for row in batch.to_pylist():
-            user = (row["instruction"] or "").strip()
-            assistant = (row["response"] or "").strip()
+            user = (row[prompt_col] or "").strip()
+            assistant = (row[reply_col] or "").strip()
             if not (4 <= len(user) <= max_prompt and 4 <= len(assistant) <= max_reply):
                 continue
             key = user[:100]

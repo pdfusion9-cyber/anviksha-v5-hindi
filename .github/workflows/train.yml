@@ -42,19 +42,19 @@ jobs:
           PY
 
       - name: Fetch Hindi text for pretraining
-        run: python src/fetch_text.py --out hindi_corpus.txt --chars 2000000
+        run: python src/fetch_text.py --out hindi_corpus.txt --chars 40000000
 
       - name: Pretrain on Hindi text
         run: |
           python src/train.py --stage pretrain --text hindi_corpus.txt \
             --dim 640 --layers 8 --ffn 2560 \
-            --seq-len 128 --batch 8 --steps 200 --time-budget 900 || true
+            --seq-len 128 --batch 8 --steps 400 --time-budget 900
 
       - name: Chat fine-tune, clock-bound
         run: |
           python src/train.py --stage chat --dim 640 --layers 8 --ffn 2560 \
             --seq-len 128 --batch 8 --lr 3e-4 \
-            --chat data/multi_train.jsonl \
+            --chat data/multi_train.jsonl --reward-weighting \
             --target-steps ${{ inputs.target_steps }} \
             --clock-budget-minutes ${{ inputs.clock_budget_minutes }}
 
@@ -77,5 +77,6 @@ jobs:
             runs/clock_report.json
             runs/quantization.json
             runs/unseen_eval.json
+            runs/eta.json
             runs/tokenizer.json
           retention-days: 30

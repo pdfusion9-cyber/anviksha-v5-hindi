@@ -19,6 +19,7 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from clock import make_budget  # noqa: E402
+from grammar_reward import score_hindi  # noqa: E402
 from model import HindiLM  # noqa: E402
 from tokenizer import CharTokenizer  # noqa: E402
 
@@ -38,8 +39,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--steps", default=600, type=int)
     p.add_argument("--lr", default=3e-4, type=float)
     p.add_argument("--threads", default=2, type=int)
-    p.add_argument("--share-blocks", action="store_true",
-                   help="ALBERT-style cross-layer weight sharing")
     p.add_argument("--time-budget", default=0.0, type=float)
     p.add_argument("--target-steps", default=0, type=int,
                    help="step ceiling; the clock budget may lower it")
@@ -49,8 +48,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_model(path: Path, tokenizer: CharTokenizer, args) -> HindiLM:
-    model = HindiLM(tokenizer.size, args.dim, args.layers, args.heads, args.ffn,
-                    args.seq_len, share_blocks=getattr(args, "share_blocks", False))
+    model = HindiLM(tokenizer.size, args.dim, args.layers, args.heads, args.ffn, args.seq_len)
     if path.exists():
         state = torch.load(path, weights_only=False)
         model.load_state_dict(state["model"])
@@ -174,6 +172,17 @@ def main() -> None:
         )
 
     sequences = [encode_pair(p) for p in pairs]
+
+    # reward weighting: a pair whose reply scores badly on the grammar reward
+    # contributes less to the gradient, without being removed entirely
+    if getattr(args, "reward_weighting", False):
+        weights = []
+        for pair in pairs:
+            score = score_hindi(pair["assistant"]).score
+            weights.append(0.5 + 0.5 * score / 100.0)
+        print(f"  reward weighting on: mean weight {sum(weights)/len(weights):.3f}")
+    else:
+        weights = [1.0] * len(pairs)
     optimiser = torch.optim.AdamW(model.parameters(), lr=args.lr * 0.5)
     rng = np.random.default_rng(1)
 
@@ -185,6 +194,8 @@ def main() -> None:
         for _ in range(count):
             model.train()
             picks = rng.integers(0, len(sequences), size=args.batch)
+            batch_weights = torch.tensor([weights[int(i)] for i in picks],
+                                         dtype=torch.float32)
             rows = []
             for index in picks:
                 row = sequences[index][: args.seq_len]
@@ -194,8 +205,13 @@ def main() -> None:
             y = torch.from_numpy(batch[:, 1:])
             optimiser.zero_grad()
             logits = model(x)
-            loss = F.cross_entropy(logits.reshape(-1, tokenizer.size), y.reshape(-1),
-                                   ignore_index=tokenizer.pad)
+            per_token = F.cross_entropy(
+                logits.reshape(-1, tokenizer.size), y.reshape(-1),
+                ignore_index=tokenizer.pad, reduction="none")
+            per_token = per_token.view(len(picks), -1)
+            mask = (y != tokenizer.pad).float()
+            per_pair = (per_token * mask).sum(1) / mask.sum(1).clamp(min=1)
+            loss = (per_pair * batch_weights).mean()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimiser.step()
