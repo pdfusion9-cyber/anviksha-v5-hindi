@@ -10,7 +10,7 @@ on:
       clock_budget_minutes:
         description: "wall-clock budget in minutes, bound to the measured CPU clock"
         required: true
-        default: "315"
+        default: "45"
 
 jobs:
   train:
@@ -41,20 +41,26 @@ jobs:
           print(f"clock {b.clock_ghz:.3f} GHz via {b.clock_source}")
           PY
 
+      # The corpus is sized to what the budget can actually cover, so pretraining
+      # sees one full pass instead of 1.55% of an unusable pile.
       - name: Fetch Hindi text for pretraining
-        run: python src/fetch_text.py --out hindi_corpus.txt --chars 40000000
+        run: python src/fetch_text.py --out hindi_corpus.txt --chars 2500000 --min-chars 2000000
 
-      - name: Pretrain on Hindi text
+      - name: Pretrain on Hindi text (brain-inspired)
         run: |
           python src/train.py --stage pretrain --text hindi_corpus.txt \
-            --dim 640 --layers 8 --ffn 2560 \
-            --seq-len 128 --batch 8 --steps 400 --time-budget 900
+            --text-chars 2500000 \
+            --dim 384 --layers 6 --heads 6 --ffn 1536 \
+            --seq-len 128 --batch 8 --steps 100000 --time-budget 3300 \
+            --share-blocks --multi-level --sparsity 0.01 --criticality
 
-      - name: Chat fine-tune, clock-bound
+      - name: Chat fine-tune, clock-bound (brain-inspired)
         run: |
-          python src/train.py --stage chat --dim 640 --layers 8 --ffn 2560 \
+          python src/train.py --stage chat --dim 384 --layers 6 --heads 6 --ffn 1536 \
             --seq-len 128 --batch 8 --lr 3e-4 \
-            --chat data/multi_train.jsonl --reward-weighting \
+            --chat data/multi_train.jsonl \
+            --share-blocks --multi-level --sparsity 0.01 --criticality \
+            --hippocampus --reward-weighting \
             --target-steps ${{ inputs.target_steps }} \
             --clock-budget-minutes ${{ inputs.clock_budget_minutes }}
 
@@ -77,6 +83,8 @@ jobs:
             runs/clock_report.json
             runs/quantization.json
             runs/unseen_eval.json
-            runs/eta.json
             runs/tokenizer.json
+            runs/eta.json
+            runs/brain_report.json
+            runs/criticality.json
           retention-days: 30

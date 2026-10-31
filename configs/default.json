@@ -277,40 +277,31 @@
     "biggest_mismatch": "hinglish prompt -> english reply, 3110 pairs",
     "fix": "explicit <hi>/<en>/<mix> tag before the assistant reply, so the output language is chosen by the caller instead of inferred from an inconsistent prompt"
   },
-  "run11": {
-    "status": "success — first end-to-end run",
-    "pretrain_chars": 40417647,
-    "vocab": 432,
-    "params": 39727360,
-    "reward_mean_weight": 0.84,
-    "chat_steps": 1003,
-    "chat_seconds": 1501,
-    "eta": {
-      "1_epoch": {
-        "steps": 1619,
-        "minutes": 41.0
-      },
-      "3_epochs": {
-        "steps": 4859,
-        "minutes": 123.1
-      },
-      "10_epochs": {
-        "steps": 16197,
-        "minutes": 410.2
-      }
+  "brain_inspired_run": {
+    "mechanisms": {
+      "predictive_coding": "aux prediction head at every block, weight 0.3",
+      "sparse_coding": "L1 penalty 0.01 on hidden activation magnitude",
+      "criticality": "branching ratio controller, target 0.20, gain clamped 0.5-2.0",
+      "weight_sharing": "one block applied 6 times",
+      "hippocampal_replay": "25% of every batch drawn from a replay buffer",
+      "reward_weighting": "grammar-reward loss weights"
     },
-    "perplexity": {
-      "train": 8.69,
-      "heldout": 9.73,
-      "gap": 1.04,
-      "unseen": 15.878
+    "model": {
+      "dim": 384,
+      "layers": 6,
+      "heads": 6,
+      "ffn": 1536,
+      "parameters": 2169216
     },
-    "quantization": {
-      "fp32": 7.279,
-      "int8": 7.508,
-      "int8_delta": 0.229,
-      "int4": 4908.652
+    "corpus": {
+      "characters": 2500000,
+      "tokens_per_parameter": 1.15
     },
-    "not_comparable_because": "vocab 189->432 and 12,934->1,003 chat steps; the model has seen 0.62 of one epoch"
+    "budget": {
+      "pretrain_minutes": 55,
+      "chat_minutes": 45
+    },
+    "comparison": "run 12 (no mechanisms): held-out 8.63, unseen 14.77, gap +0.97",
+    "caveat": "all five switched on at once, so per-mechanism attribution is not possible from this run; brain_report.json records each mechanism's state and the criticality branching ratios"
   }
 }
