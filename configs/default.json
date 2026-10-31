@@ -277,11 +277,40 @@
     "biggest_mismatch": "hinglish prompt -> english reply, 3110 pairs",
     "fix": "explicit <hi>/<en>/<mix> tag before the assistant reply, so the output language is chosen by the caller instead of inferred from an inconsistent prompt"
   },
-  "reward_weighted_run": {
-    "reward_built_in": "each pair's loss is weighted 0.5 + 0.5*grammar/100, so a bad-form reply contributes half as much gradient without being deleted",
-    "pretraining": "40M Hindi characters from the Wikipedia parquet (first run where pretraining actually executes)",
-    "chat": "data/multi_train.jsonl with reward weighting",
-    "duration": "short run; eta.json reports projected time for 1, 3 and 10 epochs",
-    "flan_fix": "FLAN uses inputs/targets columns, not instruction/response"
+  "run11": {
+    "status": "success — first end-to-end run",
+    "pretrain_chars": 40417647,
+    "vocab": 432,
+    "params": 39727360,
+    "reward_mean_weight": 0.84,
+    "chat_steps": 1003,
+    "chat_seconds": 1501,
+    "eta": {
+      "1_epoch": {
+        "steps": 1619,
+        "minutes": 41.0
+      },
+      "3_epochs": {
+        "steps": 4859,
+        "minutes": 123.1
+      },
+      "10_epochs": {
+        "steps": 16197,
+        "minutes": 410.2
+      }
+    },
+    "perplexity": {
+      "train": 8.69,
+      "heldout": 9.73,
+      "gap": 1.04,
+      "unseen": 15.878
+    },
+    "quantization": {
+      "fp32": 7.279,
+      "int8": 7.508,
+      "int8_delta": 0.229,
+      "int4": 4908.652
+    },
+    "not_comparable_because": "vocab 189->432 and 12,934->1,003 chat steps; the model has seen 0.62 of one epoch"
   }
 }

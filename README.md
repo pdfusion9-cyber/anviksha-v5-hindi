@@ -120,6 +120,45 @@ int8 remains free. int4 is still broken, though less catastrophically than befor
 (+18.8 vs +99.2) — the weights are better distributed now, but a single scale per
 matrix still cannot represent them.
 
+## Run 11: the pipeline finally works end to end
+
+For the first time every stage ran: **40,417,647 characters** of Hindi Wikipedia
+fetched, pretraining executed, chat fine-tune ran with reward weighting, both
+evaluations and quantization completed.
+
+| Stage | Result |
+|---|---|
+| Pretraining text | 40,417,647 characters (was 0 on every earlier run) |
+| Tokenizer | vocab 432, built from the pretraining corpus |
+| Parameters | 39,727,360 |
+| Reward weighting | mean weight 0.840 |
+| Chat steps | 1,003 (≈ 0.62 epoch) in 1,501 s |
+
+### Measured time budget — the answer to "how long would full training take"
+
+| Training | Steps | Time on the runner |
+|---|---|---|
+| **1 epoch** | 1,619 | **41 minutes** |
+| 3 epochs | 4,859 | 2 hours 3 minutes |
+| **10 epochs** | 16,197 | **6 hours 50 minutes** |
+
+### Why these perplexities are not comparable to earlier runs
+
+| | Earlier runs | Run 11 |
+|---|---|---|
+| Tokenizer vocab | 189 | 432 |
+| Chat steps | 12,934 | 1,003 |
+| Pretraining | none (skipped) | 40M characters |
+
+Held-out 9.73 and unseen 15.88 look worse than run 8's 3.79 / 6.44, but the
+model has seen 0.62 of an epoch against a brand-new 432-token vocabulary. It is
+not a regression, it is an unfinished run. The honest comparison needs a full
+epoch first.
+
+Quantization: fp32 7.279, int8 7.508 (+0.229 — still cheap), int4 **4908**
+(catastrophic; the freshly-initialised weights quantize far worse than trained
+ones, which is itself a useful observation).
+
 ## Generalisation: the number that matters most
 
 Held-out perplexity of 3.35 came from the **same dataset** the model trained on
