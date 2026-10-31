@@ -276,5 +276,16 @@
     "prompt_reply_language_agreement": 60.1,
     "biggest_mismatch": "hinglish prompt -> english reply, 3110 pairs",
     "fix": "explicit <hi>/<en>/<mix> tag before the assistant reply, so the output language is chosen by the caller instead of inferred from an inconsistent prompt"
+  },
+  "data_budget": {
+    "chat_pairs": 11859,
+    "chat_characters": 1411118,
+    "model_parameters": 39581440,
+    "tokens_needed_chinchilla_20x": 791628800,
+    "shortfall_factor": 561,
+    "parameters_supported_by_this_data": 70556,
+    "root_cause": "pretraining never ran: fetch_text wrote 0 characters on every run, train.py skipped pretrain, so every 40M model trained from scratch on 12k chat pairs",
+    "fix": "fetch_text now pulls the 238 MB Hindi Wikipedia parquet, falls back to the rows API, and exits non-zero below a 5M character floor",
+    "available_pretraining_text": "238 MB Hindi Wikipedia (two parquet shards)"
   }
 }
