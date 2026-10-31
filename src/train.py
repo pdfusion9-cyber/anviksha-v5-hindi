@@ -38,6 +38,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--steps", default=600, type=int)
     p.add_argument("--lr", default=3e-4, type=float)
     p.add_argument("--threads", default=2, type=int)
+    p.add_argument("--share-blocks", action="store_true",
+                   help="ALBERT-style cross-layer weight sharing")
     p.add_argument("--time-budget", default=0.0, type=float)
     p.add_argument("--target-steps", default=0, type=int,
                    help="step ceiling; the clock budget may lower it")
@@ -47,7 +49,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_model(path: Path, tokenizer: CharTokenizer, args) -> HindiLM:
-    model = HindiLM(tokenizer.size, args.dim, args.layers, args.heads, args.ffn, args.seq_len)
+    model = HindiLM(tokenizer.size, args.dim, args.layers, args.heads, args.ffn,
+                    args.seq_len, share_blocks=getattr(args, "share_blocks", False))
     if path.exists():
         state = torch.load(path, weights_only=False)
         model.load_state_dict(state["model"])

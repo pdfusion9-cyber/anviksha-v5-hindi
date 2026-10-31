@@ -287,5 +287,32 @@
     "root_cause": "pretraining never ran: fetch_text wrote 0 characters on every run, train.py skipped pretrain, so every 40M model trained from scratch on 12k chat pairs",
     "fix": "fetch_text now pulls the 238 MB Hindi Wikipedia parquet, falls back to the rows API, and exits non-zero below a 5M character floor",
     "available_pretraining_text": "238 MB Hindi Wikipedia (two parquet shards)"
+  },
+  "tokens_per_parameter": {
+    "chinchilla_rule": 20,
+    "target_range": [
+      1,
+      5
+    ],
+    "corpus_estimate_chars": 250000000,
+    "without_sharing": {
+      "params": 39581440,
+      "tokens_per_param": 6.3,
+      "tokens_needed_at_20": 792000000
+    },
+    "with_sharing": {
+      "params": 5134720,
+      "tokens_per_param": 48.7,
+      "tokens_needed_at_20": 103000000,
+      "note": "same compute per step, 7.7x fewer parameters"
+    },
+    "levers": {
+      "cross_layer_weight_sharing": "implemented (--share-blocks), 39.6M -> 5.1M",
+      "tied_embeddings": "already used",
+      "bpe_tokenizer": "accounting only: fewer tokens, more information each",
+      "distillation": "priors reduce the data needed, not implemented",
+      "multi_epoch_repetition": "helps to about 4 passes, then memorises"
+    },
+    "honest_caveat": "below Chinchilla the model trades generalisation for memorisation; 1-5 tokens/param is safe only when the corpus is large and diverse, not for 12k chat pairs"
   }
 }
