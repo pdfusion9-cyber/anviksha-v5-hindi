@@ -16,7 +16,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-SPECIALS = ["<pad>", "<bos>", "<eos>", "<user>", "<assistant>", "<sep>"]
+SPECIALS = ["<pad>", "<bos>", "<eos>", "<user>", "<assistant>", "<sep>",
+            "<hi>", "<en>", "<mix>"]
 MAX_VOCAB = 1024
 
 

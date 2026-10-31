@@ -261,5 +261,20 @@
     },
     "target": "beat 6.442 on the same unseen pairs",
     "note": "fetch_multi tolerates a failing source so one bad parquet cannot kill a 5h run"
+  },
+  "language_policy": {
+    "decision": "bilingual — English kept alongside Hindi and Hinglish",
+    "filter_kept": 11859,
+    "filter_dropped": 406,
+    "kept_pct": 96.7,
+    "script_mix": {
+      "devanagari": 5564,
+      "hinglish": 2873,
+      "english": 3783,
+      "mixed": 45
+    },
+    "prompt_reply_language_agreement": 60.1,
+    "biggest_mismatch": "hinglish prompt -> english reply, 3110 pairs",
+    "fix": "explicit <hi>/<en>/<mix> tag before the assistant reply, so the output language is chosen by the caller instead of inferred from an inconsistent prompt"
   }
 }

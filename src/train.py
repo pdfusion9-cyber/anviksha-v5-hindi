@@ -148,11 +148,24 @@ def main() -> None:
     pairs = [json.loads(line) for line in Path(args.chat).read_text(encoding="utf-8").splitlines() if line.strip()]
     print(f"{len(pairs)} chat pairs, vocab {tokenizer.size}")
 
+    def language_tag(text: str) -> str:
+        dev = sum(1 for ch in text if "\u0900" <= ch <= "\u097f")
+        lat = sum(1 for ch in text if ch.isascii() and ch.isalpha())
+        if dev and dev >= lat:
+            return "<hi>"
+        if lat and dev == 0:
+            words = {w.lower() for w in text.replace("?", " ").split()}
+            markers = words & {"hai", "hain", "ka", "ki", "ke", "ko", "se", "me",
+                               "kya", "mujhe", "aap", "nahi", "kare", "karo"}
+            return "<mix>" if markers else "<en>"
+        return "<mix>"
+
     def encode_pair(pair: dict) -> list[int]:
         return (
             [tokenizer.stoi["<bos>"], tokenizer.stoi["<user>"]]
             + tokenizer.encode(pair["user"])
             + [tokenizer.stoi["<sep>"], tokenizer.stoi["<assistant>"]]
+            + [tokenizer.stoi[language_tag(pair["assistant"])]]
             + tokenizer.encode(pair["assistant"])
             + [tokenizer.eos]
         )

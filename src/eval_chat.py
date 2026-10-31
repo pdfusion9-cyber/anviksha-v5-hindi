@@ -40,8 +40,8 @@ def parse_args() -> argparse.Namespace:
 def encode_pair(pair: dict, tok: CharTokenizer) -> list[int]:
     return ([tok.stoi["<bos>"], tok.stoi["<user>"]]
             + tok.encode(pair["user"])
-            + [tok.stoi["<sep>"], tok.stoi["<assistant>"]]
-            + tok.encode(pair["assistant"]) + [tok.eos])
+            + [tok.stoi["<sep>"], tok.stoi["<assistant>"], tok.stoi.get("<hi>", tok.eos)]
+            + [tok.stoi.get("<hi>", tok.eos)] + tok.encode(pair["assistant"]) + [tok.eos])
 
 
 @torch.no_grad()
@@ -67,7 +67,7 @@ def generate(model, tok, prompt: str, seq_len: int, temperature: float, top_k: i
              max_new: int = 48) -> str:
     ids = ([tok.stoi["<bos>"], tok.stoi["<user>"]]
            + tok.encode(prompt)
-           + [tok.stoi["<sep>"], tok.stoi["<assistant>"]])
+           + [tok.stoi["<sep>"], tok.stoi["<assistant>"], tok.stoi.get("<hi>", tok.eos)])
     tokens = torch.tensor([ids])
     for _ in range(max_new):
         if tokens.shape[1] >= seq_len:

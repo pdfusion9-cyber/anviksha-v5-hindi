@@ -27,6 +27,8 @@ def main() -> None:
     parser.add_argument("--input", default="data/multi_train.jsonl", type=Path)
     parser.add_argument("--out", default="data/filtered", type=Path)
     parser.add_argument("--min-score", default=55, type=int)
+    parser.add_argument("--keep-english", default=1, type=int,
+                        help="1 = keep English replies (bilingual model), 0 = drop them")
     parser.add_argument("--min-chars", default=8, type=int)
     args = parser.parse_args()
 
@@ -50,6 +52,12 @@ def main() -> None:
         reason = None
         if len(reply.strip()) < args.min_chars:
             reason = "too_short"
+        elif result.script == "english" and args.keep_english:
+            # English is kept on purpose: the model is bilingual, and the prompt's
+            # own language tells it which language to answer in. Only genuine
+            # junk is rejected.
+            if len(reply.split()) < 3:
+                reason = "english_too_short"
         elif result.score < args.min_score:
             reason = f"low_grammar:{result.script}"
         elif prompt.strip()[:80] in seen_prompts:
@@ -82,6 +90,9 @@ def main() -> None:
             "max": scores[-1] if scores else 0,
         },
         "min_score_threshold": args.min_score,
+        "keep_english": bool(args.keep_english),
+        "language_policy": "bilingual: Devanagari, Hinglish and English all kept; "
+                           "the prompt language selects the reply language",
     }
     (args.out / "filter_stats.json").write_text(json.dumps(stats, indent=2))
     print(json.dumps(stats, indent=2))
