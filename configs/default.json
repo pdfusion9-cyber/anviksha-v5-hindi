@@ -241,5 +241,25 @@
       "perplexity": 21.521,
       "delta": 18.758
     }
+  },
+  "four_source_run": {
+    "sources": [
+      "smangrul",
+      "dolly",
+      "anudesh",
+      "flan_v2"
+    ],
+    "cap_per_source": 12000,
+    "window_chars": [
+      100,
+      140
+    ],
+    "unseen_source": "hh-rlhf/hi",
+    "baseline_unseen_same_100_pairs": {
+      "run7_one_source": 7.694,
+      "run8_three_sources": 6.442
+    },
+    "target": "beat 6.442 on the same unseen pairs",
+    "note": "fetch_multi tolerates a failing source so one bad parquet cannot kill a 5h run"
   }
 }
