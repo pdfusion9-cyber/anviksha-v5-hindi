@@ -40,6 +40,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", default=3e-4, type=float)
     p.add_argument("--threads", default=2, type=int)
     p.add_argument("--time-budget", default=0.0, type=float)
+    p.add_argument("--reward-weighting", action="store_true",
+                   help="weight each pair's loss by its grammar reward")
+    p.add_argument("--share-blocks", action="store_true",
+                   help="ALBERT-style cross-layer weight sharing")
     p.add_argument("--target-steps", default=0, type=int,
                    help="step ceiling; the clock budget may lower it")
     p.add_argument("--clock-budget-minutes", default=0.0, type=float,
@@ -48,7 +52,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_model(path: Path, tokenizer: CharTokenizer, args) -> HindiLM:
-    model = HindiLM(tokenizer.size, args.dim, args.layers, args.heads, args.ffn, args.seq_len)
+    model = HindiLM(tokenizer.size, args.dim, args.layers, args.heads, args.ffn,
+                    args.seq_len, share_blocks=getattr(args, "share_blocks", False))
     if path.exists():
         state = torch.load(path, weights_only=False)
         model.load_state_dict(state["model"])
@@ -173,13 +178,10 @@ def main() -> None:
 
     sequences = [encode_pair(p) for p in pairs]
 
-    # reward weighting: a pair whose reply scores badly on the grammar reward
-    # contributes less to the gradient, without being removed entirely
+    # reward built into the objective: a pair whose reply scores badly on the
+    # grammar reward contributes less gradient, without being deleted
     if getattr(args, "reward_weighting", False):
-        weights = []
-        for pair in pairs:
-            score = score_hindi(pair["assistant"]).score
-            weights.append(0.5 + 0.5 * score / 100.0)
+        weights = [0.5 + 0.5 * score_hindi(pair["assistant"]).score / 100.0 for pair in pairs]
         print(f"  reward weighting on: mean weight {sum(weights)/len(weights):.3f}")
     else:
         weights = [1.0] * len(pairs)
@@ -194,8 +196,6 @@ def main() -> None:
         for _ in range(count):
             model.train()
             picks = rng.integers(0, len(sequences), size=args.batch)
-            batch_weights = torch.tensor([weights[int(i)] for i in picks],
-                                         dtype=torch.float32)
             rows = []
             for index in picks:
                 row = sequences[index][: args.seq_len]
@@ -211,6 +211,7 @@ def main() -> None:
             per_token = per_token.view(len(picks), -1)
             mask = (y != tokenizer.pad).float()
             per_pair = (per_token * mask).sum(1) / mask.sum(1).clamp(min=1)
+            batch_weights = torch.tensor([weights[int(i)] for i in picks])
             loss = (per_pair * batch_weights).mean()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -233,6 +234,28 @@ def main() -> None:
     remaining = max(target - 15, 0) if planned else target
     elapsed, done = run_steps(remaining, step_offset=15 if planned else 0)
     print(f"completed {15 + done:,} steps in {elapsed:.0f}s")
+
+    total_steps = 15 + done
+    per_step = elapsed / max(done, 1)
+    epochs_done = total_steps * args.batch / max(len(sequences), 1)
+    eta = {
+        "steps_completed": total_steps,
+        "seconds": round(elapsed, 1),
+        "seconds_per_step": round(per_step, 3),
+        "pairs": len(sequences),
+        "batch": args.batch,
+        "epochs_completed": round(epochs_done, 2),
+        "projection": {
+            f"{n}_epochs": {
+                "steps": int(n * len(sequences) / args.batch),
+                "minutes": round(n * len(sequences) / args.batch * per_step / 60, 1),
+            }
+            for n in (1, 3, 10)
+        },
+    }
+    Path(args.out).mkdir(parents=True, exist_ok=True)
+    Path(args.out, "eta.json").write_text(json.dumps(eta, indent=2))
+    print("ETA:", json.dumps(eta["projection"]))
 
     if budget is not None:
         report = budget.as_dict()

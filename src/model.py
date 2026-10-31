@@ -48,14 +48,11 @@ class HindiLM(nn.Module):
     def __init__(self, vocab: int, dim: int = 192, layers: int = 4, heads: int = 4,
                  ffn: int = 768, seq_len: int = 192, dropout: float = 0.1,
                  share_blocks: bool = False):
-        """`share_blocks` applies one transformer block `layers` times instead of
-        stacking distinct blocks.
+        """`share_blocks` applies one transformer block `layers` times.
 
-        This is the ALBERT trick, and it exists to change one number: tokens per
-        parameter. A 40M model with 8 separate blocks needs ~792M tokens at the
-        Chinchilla ratio; the same depth with one shared block is ~6M parameters
-        and needs ~120M tokens. Compute per step is unchanged -- only the
-        parameter count, and therefore the data requirement, drops.
+        ALBERT-style sharing exists to change one number: tokens per parameter.
+        8 separate blocks at dim 640 cost 39.6M parameters; one shared block is
+        5.1M, with identical compute per step.
         """
         super().__init__()
         self.embed = nn.Embedding(vocab, dim)
