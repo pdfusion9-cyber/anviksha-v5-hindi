@@ -101,7 +101,7 @@ jobs:
             --heads ${{ inputs.heads }} --ffn ${{ inputs.ffn }} \
             --seq-len 128 --batch 8 --steps 1000000 --threads 4 \
             --checkpoint-every 500 \
-            --time-budget ${{ fromJSON(inputs.pretrain_minutes) * 60 }} \
+            --time-budget $(( ${{ inputs.pretrain_minutes }} * 60 )) \
             ${{ inputs.share_blocks == '1' && '--share-blocks' || '' }} \
             ${{ inputs.brain_mechanisms == '1' && '--multi-level --sparsity 0.01 --criticality' || '' }}
 
