@@ -66,6 +66,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hippocampus", action="store_true")
     p.add_argument("--hippocampus-fraction", default=0.25, type=float)
     p.add_argument("--reward-weighting", action="store_true")
+    p.add_argument("--checkpoint-every", default=200, type=int,
+                   help="how often to write a checkpoint; 25 was wasteful for large models")
     return p.parse_args()
 
 
@@ -186,7 +188,7 @@ def main() -> None:
             x = torch.from_numpy(batch)
             y = torch.from_numpy(targets)
             optimiser.zero_grad()
-            logits, aux_logits, hidden = model(x, return_aux=args.multi_level)
+            logits, aux_logits, hidden = model(x, return_aux=True)
             loss, _ = combined_loss(logits, aux_logits, hidden, y, tokenizer, args)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -287,7 +289,7 @@ def main() -> None:
             x = torch.from_numpy(batch[:, :-1])
             y = torch.from_numpy(batch[:, 1:])
             optimiser.zero_grad()
-            logits, aux_logits, hidden = model(x, return_aux=args.multi_level)
+            logits, aux_logits, hidden = model(x, return_aux=True)
             batch_weights = torch.tensor([weights[int(i)] for i in picks])
             loss, parts = combined_loss(logits, aux_logits, hidden, y, tokenizer,
                                         args, weights=batch_weights)
@@ -307,7 +309,7 @@ def main() -> None:
             loss_log.append(last)
             done += 1
             global_step = step_offset + done
-            if global_step % 25 == 0:
+            if global_step % max(args.checkpoint_every, 1) == 0:
                 print(f"  step {global_step}  loss {last:.4f}  "
                       f"{time.time() - started:.0f}s", flush=True)
                 save(model, tokenizer, args.out / "chat.pt", args)
@@ -357,6 +359,10 @@ def main() -> None:
         "loss_first_50_mean": round(float(np.mean(loss_log[:50])), 4) if loss_log else None,
         "loss_last_50_mean": round(float(np.mean(loss_log[-50:])), 4) if loss_log else None,
         "hippocampus_size": len(hippocampus),
+        "tokens_per_second": round(
+            total_steps * args.batch * args.seq_len / max(elapsed, 1e-6), 1),
+        "threads": args.threads,
+        "seq_len": args.seq_len,
     }
     if model.controller is not None:
         brain["criticality"] = model.controller.report()

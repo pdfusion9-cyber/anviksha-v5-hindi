@@ -8,9 +8,45 @@ on:
         required: true
         default: "0"
       clock_budget_minutes:
-        description: "wall-clock budget in minutes, bound to the measured CPU clock"
+        description: "chat wall-clock budget in minutes"
         required: true
         default: "45"
+      dim:
+        description: "model width"
+        required: true
+        default: "384"
+      layers:
+        description: "model depth"
+        required: true
+        default: "6"
+      heads:
+        description: "attention heads"
+        required: true
+        default: "6"
+      ffn:
+        description: "feed-forward width"
+        required: true
+        default: "1536"
+      pretrain_minutes:
+        description: "pretraining wall-clock budget in minutes (0 = skip)"
+        required: true
+        default: "55"
+      pretrain_chars:
+        description: "characters of Hindi text to use"
+        required: true
+        default: "2500000"
+      share_blocks:
+        description: "1 = ALBERT-style weight sharing, 0 = distinct blocks"
+        required: true
+        default: "1"
+      brain_mechanisms:
+        description: "1 = multi-level + sparsity + criticality + hippocampus"
+        required: true
+        default: "1"
+      resume_run_id:
+        description: "optional: download this run's artifact into runs/ first, to continue training"
+        required: false
+        default: ""
 
 jobs:
   train:
@@ -22,6 +58,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      # Long training is split across jobs: this pulls the previous checkpoint
+      # back in so a 16-hour pretrain can be built from 6-hour pieces.
+      - name: Resume from a previous run
+        if: ${{ inputs.resume_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: v5-hindi-run
+          path: runs
+          run-id: ${{ inputs.resume_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install
         run: |
@@ -35,34 +82,41 @@ jobs:
       - name: Report CPU clock
         run: |
           python - <<'PY'
-          import sys; sys.path.insert(0, "src")
+          import os, sys; sys.path.insert(0, "src")
           from clock import make_budget
           b = make_budget(60)
           print(f"clock {b.clock_ghz:.3f} GHz via {b.clock_source}")
+          print(f"cpu count {os.cpu_count()}")
           PY
 
-      # The corpus is sized to what the budget can actually cover, so pretraining
-      # sees one full pass instead of 1.55% of an unusable pile.
       - name: Fetch Hindi text for pretraining
-        run: python src/fetch_text.py --out hindi_corpus.txt --chars 2500000 --min-chars 2000000
+        run: python src/fetch_text.py --out hindi_corpus.txt --chars ${{ inputs.pretrain_chars }} --min-chars 100000
 
-      - name: Pretrain on Hindi text (brain-inspired)
+      - name: Pretrain on Hindi text
+        if: ${{ inputs.pretrain_minutes != '0' }}
         run: |
           python src/train.py --stage pretrain --text hindi_corpus.txt \
-            --text-chars 2500000 \
-            --dim 384 --layers 6 --heads 6 --ffn 1536 \
-            --seq-len 128 --batch 8 --steps 100000 --time-budget 3300 \
-            --share-blocks --multi-level --sparsity 0.01 --criticality
+            --text-chars ${{ inputs.pretrain_chars }} \
+            --dim ${{ inputs.dim }} --layers ${{ inputs.layers }} \
+            --heads ${{ inputs.heads }} --ffn ${{ inputs.ffn }} \
+            --seq-len 128 --batch 8 --steps 1000000 --threads 4 \
+            --checkpoint-every 500 \
+            --time-budget ${{ fromJSON(inputs.pretrain_minutes) * 60 }} \
+            ${{ inputs.share_blocks == '1' && '--share-blocks' || '' }} \
+            ${{ inputs.brain_mechanisms == '1' && '--multi-level --sparsity 0.01 --criticality' || '' }}
 
-      - name: Chat fine-tune, clock-bound (brain-inspired)
+      - name: Chat fine-tune, clock-bound
         run: |
-          python src/train.py --stage chat --dim 384 --layers 6 --heads 6 --ffn 1536 \
-            --seq-len 128 --batch 8 --lr 3e-4 \
+          python src/train.py --stage chat \
+            --dim ${{ inputs.dim }} --layers ${{ inputs.layers }} \
+            --heads ${{ inputs.heads }} --ffn ${{ inputs.ffn }} \
+            --seq-len 128 --batch 8 --lr 3e-4 --threads 4 \
+            --checkpoint-every 200 \
             --chat data/multi_train.jsonl \
-            --share-blocks --multi-level --sparsity 0.01 --criticality \
-            --hippocampus --reward-weighting \
             --target-steps ${{ inputs.target_steps }} \
-            --clock-budget-minutes ${{ inputs.clock_budget_minutes }}
+            --clock-budget-minutes ${{ inputs.clock_budget_minutes }} \
+            ${{ inputs.share_blocks == '1' && '--share-blocks' || '' }} \
+            ${{ inputs.brain_mechanisms == '1' && '--multi-level --sparsity 0.01 --criticality --hippocampus --reward-weighting' || '--reward-weighting' }}
 
       - name: Held-out evaluation and safety screen
         run: python src/eval_chat.py --heldout data/multi_heldout.jsonl --limit 200 --generate 30 || true
@@ -79,6 +133,7 @@ jobs:
           name: v5-hindi-run
           path: |
             runs/chat.pt
+            runs/pretrain.pt
             runs/eval.json
             runs/clock_report.json
             runs/quantization.json
