@@ -212,6 +212,34 @@
     "unseen_source": "hh-rlhf/hi",
     "unseen_pairs": 1354,
     "baseline_old_checkpoint_unseen_ppl": 7.898,
-    "target": "beat 7.898 on the same unseen source"
+    "target": "beat 7.898 on the same unseen source",
+    "steps_completed": 12934,
+    "wall_clock_seconds": 19091,
+    "measured_steps_per_second": 0.684,
+    "clock_ghz": 3.694,
+    "heldout_perplexity": 3.79,
+    "overfit_gap": 0.56,
+    "unseen_hh_same_100_pairs": {
+      "run7": 7.694,
+      "run8": 6.442,
+      "improvement_pct": 16.3
+    },
+    "verdict": "source diversity works; the doubled overfit gap says more data is still the lever"
+  },
+  "quantization_run8": {
+    "fp32": {
+      "mb": 158.29,
+      "perplexity": 2.764
+    },
+    "int8": {
+      "mb": 39.84,
+      "perplexity": 2.779,
+      "delta": 0.015
+    },
+    "int4_per_tensor": {
+      "mb": 20.01,
+      "perplexity": 21.521,
+      "delta": 18.758
+    }
   }
 }

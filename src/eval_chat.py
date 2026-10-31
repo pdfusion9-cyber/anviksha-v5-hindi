@@ -26,7 +26,7 @@ from tokenizer import CharTokenizer  # noqa: E402
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", default="runs/chat.pt", type=Path)
-    p.add_argument("--train", default="data/chat_train.jsonl", type=Path)
+    p.add_argument("--train", default="data/multi_train.jsonl", type=Path)
     p.add_argument("--heldout", default="data/chat_heldout.jsonl", type=Path)
     p.add_argument("--out", default="runs/eval.json")
     p.add_argument("--limit", default=300, type=int)

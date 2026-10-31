@@ -72,7 +72,7 @@ def perplexity(model, tok, pairs, seq_len, batch=2) -> tuple[float, int, int]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--parquet", default="cache/dolly.parquet", type=Path)
-    parser.add_argument("--checkpoint", default="artifact/chat.pt", type=Path)
+    parser.add_argument("--checkpoint", default="runs/chat.pt", type=Path)
     parser.add_argument("--out", default="runs/unseen_eval.json", type=Path)
     parser.add_argument("--limit", default=400, type=int)
     parser.add_argument("--max-prompt", default=60, type=int)

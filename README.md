@@ -86,6 +86,40 @@ structural — one scale per weight matrix cannot represent these weights — an
 will not be fixed by trying again. Group-wise quantization (one scale per 32–128
 weights) is the required fix.
 
+## Multi-source run: does diversity actually help?
+
+The single-source model scored 7.69 perplexity on a corpus it had never seen.
+This run trained on **three sources** and was measured on the same unseen pairs.
+
+| | Run 7 (one source) | **Run 8 (three sources)** |
+|---|---|---|
+| Training pairs | 11,912 | 12,265 |
+| Sources | smangrul only | smangrul 7,687 + Dolly 4,956 + anudesh 134 |
+| Steps | 11,361 | 12,934 |
+| Held-out (same family) | 3.35 | 3.79 (different held-out set, not comparable) |
+| Overfit gap | +0.28 | **+0.56** |
+| **Unseen hh-rlhf, same 100 pairs** | **7.694** | **6.442** |
+
+**16.3 % better on a source the model has never seen.** Same test set, same
+measurement, same architecture, same step budget — only the training data
+changed. That is a controlled result, and it says diversity works.
+
+The catch is visible too: the overfit gap doubled to +0.56. The model now fits
+12,265 pairs closely enough that generalisation lags behind. The next lever is
+still more data, not a bigger model.
+
+### Quantization at this checkpoint
+
+| Variant | Size | Perplexity | Change |
+|---|---|---|---|
+| fp32 | 158.29 MB | 2.764 | — |
+| **int8** | **39.84 MB** | **2.779** | **+0.015** |
+| int4 (per-tensor) | 20.01 MB | 21.521 | +18.8 |
+
+int8 remains free. int4 is still broken, though less catastrophically than before
+(+18.8 vs +99.2) — the weights are better distributed now, but a single scale per
+matrix still cannot represent them.
+
 ## Generalisation: the number that matters most
 
 Held-out perplexity of 3.35 came from the **same dataset** the model trained on
