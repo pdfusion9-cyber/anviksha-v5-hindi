@@ -1,0 +1,25 @@
+{
+  "input": 12265,
+  "kept": 8196,
+  "dropped": 4069,
+  "kept_pct": 66.8,
+  "drop_reasons": {
+    "low_grammar:english": 3775,
+    "low_grammar:devanagari": 6,
+    "too_short": 238,
+    "low_grammar:mixed": 21,
+    "duplicate_prompt": 29
+  },
+  "scripts": {
+    "devanagari": 5564,
+    "hinglish": 2873,
+    "english": 3783,
+    "mixed": 45
+  },
+  "grammar_score": {
+    "min": 30,
+    "median": 75,
+    "max": 100
+  },
+  "min_score_threshold": 55
+}
