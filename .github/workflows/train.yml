@@ -127,7 +127,23 @@ jobs:
       - name: Quantize to int8 and int4
         run: python src/quantize.py --limit 100 || true
 
+      - name: Check evaluation produced numbers
+        if: always()
+        run: |
+          missing=""
+          for f in runs/eval.json runs/unseen_eval.json runs/quantization.json runs/eta.json; do
+            [ -f "$f" ] || missing="$missing $f"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::evaluation produced no output for:$missing"
+            echo "The steps above use '|| true' so their errors are not fatal, but a"
+            echo "missing file means a script crashed. Check the log for the traceback."
+            exit 1
+          fi
+          echo "all expected result files present"
+
       - name: Upload results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: v5-hindi-run

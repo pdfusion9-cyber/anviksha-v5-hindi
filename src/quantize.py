@@ -24,6 +24,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from checkpoint import build_from_checkpoint  # noqa: E402
 from model import HindiLM  # noqa: E402
 from tokenizer import CharTokenizer  # noqa: E402
 
@@ -103,12 +104,7 @@ def main() -> None:
     args = parser.parse_args()
 
     tok = CharTokenizer.load(args.checkpoint.parent / "tokenizer.json")
-    state = torch.load(args.checkpoint, weights_only=False)
-    cfg = state["args"]
-    model = HindiLM(tok.size, cfg["dim"], cfg["layers"], cfg["heads"], cfg["ffn"],
-                    cfg["seq_len"])
-    model.load_state_dict(state["model"])
-    model.eval()
+    model, cfg = build_from_checkpoint(args.checkpoint, tok)
 
     pairs = [json.loads(line) for line in args.heldout.read_text(encoding="utf-8").splitlines()
              if line.strip()][: args.limit]
