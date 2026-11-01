@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from checkpoint import build_from_checkpoint  # noqa: E402
 from grammar_reward import score_hindi  # noqa: E402
 from meaning_reward import score_against_reference  # noqa: E402
-from path_reward import score_path  # noqa: E402
+from judge import judge  # noqa: E402
 from lessons import LessonStore, best_fragment  # noqa: E402
 from tokenizer import CharTokenizer  # noqa: E402
 
@@ -64,20 +64,15 @@ def _norm(text: str) -> str:
 
 
 def score(prompt: str, reply: str, reference: str | None) -> tuple[float, dict]:
-    if len(reply.strip()) < 2:
-        return 0.0, {"path": 0.0, "form": 0.0, "answer": None, "notes": ["empty reply"]}
-    path = score_path(prompt, reply)
-    form = score_hindi(reply)
-    answer = score_against_reference(reply, reference) if reference else None
-    if answer is None:
-        combined = 0.6 * path.score + 0.4 * form.score
-    else:
-        combined = 0.35 * path.score + 0.25 * form.score + 0.40 * answer.total
-    return combined, {
-        "path": round(path.score, 1),
-        "form": round(form.score, 1),
-        "answer": None if answer is None else answer.total,
-        "notes": path.notes,
+    """Gate first, score second. A reply that fails any gate scores at most 30,
+    so a wrong answer cannot average its way past the threshold on good form."""
+    verdict = judge(prompt, reply, reference)
+    return verdict.score, {
+        "path": verdict.path,
+        "form": verdict.form,
+        "answer": verdict.answer,
+        "passed": verdict.passed,
+        "notes": verdict.reasons,
     }
 
 
@@ -144,9 +139,10 @@ def main() -> None:
                     lessons.record(note, prompt, reply, fragment=frag)
                 fragments.append({"prompt": prompt, "reply": reply,
                                   "score": round(combined, 1),
+                                  "gates_passed": detail.get("passed", False),
                                   "best_fragment": frag, "flaws": detail["notes"]})
         scores.append(best[0])
-        if best[0] >= args.threshold:
+        if best[0] >= args.threshold and best[2].get("passed", False):
             text = best[1]
             if args.fragment_mode:
                 # the best span of the best reply: higher precision, less noise
@@ -158,6 +154,7 @@ def main() -> None:
                 continue  # already known, adding it again would only reinforce
             existing.add(key)
             kept.append({"user": prompt, "assistant": text,
+                         "reference": reference,
                          "score": round(best[0], 1), "source": "rft"})
         if (i + 1) % 50 == 0:
             print(f"  {i + 1}/{len(rows)} prompts, kept {len(kept)}")
@@ -178,6 +175,7 @@ def main() -> None:
         "fragment_mode": bool(args.fragment_mode),
         "existing_replies_compared": len(existing),
         "rejected_analysed": len(fragments),
+        "rejected_by_gate": sum(1 for f in fragments if not f.get("gates_passed", True)),
         "lessons": lessons.summary(),
     }
     lessons.save()

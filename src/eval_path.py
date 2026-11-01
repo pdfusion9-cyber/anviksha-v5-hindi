@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from checkpoint import build_from_checkpoint  # noqa: E402
 from grammar_reward import score_hindi  # noqa: E402
 from meaning_reward import score_against_reference  # noqa: E402
+from judge import judge  # noqa: E402
 from path_reward import score_path  # noqa: E402
 from tokenizer import CharTokenizer  # noqa: E402
 
@@ -69,7 +70,7 @@ def main() -> None:
             args.prompts.read_text(encoding="utf-8").splitlines() if line.strip()]
     rows = rows[: args.limit]
 
-    paths, forms, answers, empties = [], [], [], 0
+    paths, forms, answers, empties, verdicts = [], [], [], 0, []
     for i, row in enumerate(rows):
         reply = sample(model, tokenizer, cfg, row["user"], args.temperature,
                        args.top_k, args.max_new, seed=i)
@@ -79,6 +80,7 @@ def main() -> None:
         forms.append(score_hindi(reply).score)
         if row.get("assistant"):
             answers.append(score_against_reference(reply, row["assistant"]).total)
+            verdicts.append(judge(row["user"], reply, row["assistant"]).passed)
 
     def mean(xs):
         return round(statistics.mean(xs), 2) if xs else None
@@ -91,6 +93,8 @@ def main() -> None:
         "answer_mean": mean(answers),
         "path_ge_60": round(sum(1 for p in paths if p >= 60) / max(len(paths), 1), 3),
         "form_ge_60": round(sum(1 for f in forms if f >= 60) / max(len(forms), 1), 3),
+        "strict_pass_rate": (round(sum(verdicts) / len(verdicts), 3)
+                             if verdicts else None),
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
