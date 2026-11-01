@@ -125,7 +125,10 @@ jobs:
           PY
           mkdir -p runs/candidate
           cp runs/tokenizer.json runs/candidate/tokenizer.json
+          # --init-from makes a missing or mismatched base a hard error instead of a
+          # silent random initialisation, which is what produced the last two failures
           python src/train.py --stage chat --chat data/rft_frag_mix.jsonl \
+            --init-from runs/base_frozen.pt \
             --out runs/candidate --steps ${{ inputs.steps }} --lr ${{ inputs.lr }} \
             --dim 384 --layers 6 --heads 6 --ffn 1536 --seq-len 128 \
             --batch 8 --threads 2 --share-blocks --checkpoint-every 200

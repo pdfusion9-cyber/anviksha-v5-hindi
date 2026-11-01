@@ -66,6 +66,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hippocampus", action="store_true")
     p.add_argument("--hippocampus-fraction", default=0.25, type=float)
     p.add_argument("--reward-weighting", action="store_true")
+    p.add_argument("--init-from", default=None, type=Path,
+                   help="checkpoint to start from. Without this the chat stage looks "
+                        "for <out>/pretrain.pt and silently starts from random weights "
+                        "if it is absent, which is how two 'fine-tunes' trained from "
+                        "scratch and lost to the model they were meant to improve")
     p.add_argument("--checkpoint-every", default=200, type=int,
                    help="how often to write a checkpoint; 25 was wasteful for large models")
     return p.parse_args()
@@ -77,16 +82,27 @@ def build_model(tokenizer: CharTokenizer, args) -> HindiLM:
                    multi_level=args.multi_level, criticality=args.criticality)
 
 
-def load_model(path: Path, tokenizer: CharTokenizer, args) -> HindiLM:
+def load_model(path: Path, tokenizer: CharTokenizer, args,
+               required: bool = False) -> HindiLM:
     model = build_model(tokenizer, args)
-    if path.exists():
-        state = torch.load(path, weights_only=False)
-        try:
-            model.load_state_dict(state["model"])
-            print(f"  resumed from {path}")
-        except RuntimeError as exc:
-            print(f"  checkpoint incompatible with this configuration, starting fresh "
-                  f"({str(exc).splitlines()[0][:80]})")
+    if not path.exists():
+        if required:
+            raise SystemExit(
+                f"--init-from {path} does not exist. Refusing to train from random "
+                f"weights when a starting checkpoint was requested.")
+        print(f"  no checkpoint at {path}: training from random weights")
+        return model
+    state = torch.load(path, weights_only=False)
+    try:
+        model.load_state_dict(state["model"])
+        print(f"  resumed from {path}")
+    except RuntimeError as exc:
+        if required:
+            raise SystemExit(
+                f"--init-from {path} is incompatible with this configuration: "
+                f"{str(exc).splitlines()[0][:120]}")
+        print(f"  checkpoint incompatible with this configuration, starting fresh "
+              f"({str(exc).splitlines()[0][:80]})")
     return model
 
 
@@ -224,7 +240,11 @@ def main() -> None:
         tokenizer.save(tokenizer_path)
         print(f"  built tokenizer from chat data: vocab {tokenizer.size}")
 
-    model = load_model(args.out / "pretrain.pt", tokenizer, args)
+    if args.init_from is not None:
+        model = load_model(args.init_from, tokenizer, args, required=True)
+        print(f"  chat stage started from {args.init_from}")
+    else:
+        model = load_model(args.out / "pretrain.pt", tokenizer, args)
     pairs = [json.loads(line) for line in
              Path(args.chat).read_text(encoding="utf-8").splitlines() if line.strip()]
     report = model.parameters_report()
