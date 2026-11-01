@@ -30,6 +30,7 @@ from checkpoint import build_from_checkpoint  # noqa: E402
 from grammar_reward import score_hindi  # noqa: E402
 from meaning_reward import score_against_reference  # noqa: E402
 from path_reward import score_path  # noqa: E402
+from lessons import LessonStore, best_fragment  # noqa: E402
 from tokenizer import CharTokenizer  # noqa: E402
 
 
@@ -87,6 +88,10 @@ def main() -> None:
     parser.add_argument("--top-k", default=20, type=int)
     parser.add_argument("--max-new", default=60, type=int)
     parser.add_argument("--threads", default=2, type=int)
+    parser.add_argument("--lessons", default="data/lessons.jsonl", type=Path,
+                        help="persistent record of flaws, deduplicated and counted")
+    parser.add_argument("--fragments", default="data/analysis/fragments.jsonl", type=Path,
+                        help="best span from each rejected reply, for deeper analysis")
     args = parser.parse_args()
     torch.set_num_threads(args.threads)
 
@@ -97,6 +102,8 @@ def main() -> None:
             args.prompts.read_text(encoding="utf-8").splitlines() if line.strip()]
     rows = rows[: args.limit]
 
+    lessons = LessonStore(args.lessons)
+    fragments = []
     kept, tried, scores = [], 0, []
     for i, row in enumerate(rows):
         prompt = row["user"]
@@ -109,6 +116,15 @@ def main() -> None:
             combined, detail = score(prompt, reply, reference)
             if best is None or combined > best[0]:
                 best = (combined, reply, detail)
+            else:
+                # a rejected reply is not uniformly bad: keep the span that still
+                # scores, and write the flaw down once with a count
+                frag = best_fragment(prompt, reply)
+                for note in detail["notes"]:
+                    lessons.record(note, prompt, reply, fragment=frag)
+                fragments.append({"prompt": prompt, "reply": reply,
+                                  "score": round(combined, 1),
+                                  "best_fragment": frag, "flaws": detail["notes"]})
         scores.append(best[0])
         if best[0] >= args.threshold:
             kept.append({"user": prompt, "assistant": best[1],
@@ -129,7 +145,16 @@ def main() -> None:
         "threshold": args.threshold,
         "mean_best_score": round(sum(scores) / max(len(scores), 1), 1),
         "max_best_score": round(max(scores), 1) if scores else None,
+        "rejected_analysed": len(fragments),
+        "lessons": lessons.summary(),
     }
+    lessons.save()
+    if fragments:
+        args.fragments.parent.mkdir(parents=True, exist_ok=True)
+        args.fragments.write_text(
+            "\n".join(json.dumps(f, ensure_ascii=False) for f in fragments) + "\n",
+            encoding="utf-8")
+
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))

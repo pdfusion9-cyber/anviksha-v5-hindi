@@ -29,6 +29,7 @@ from typing import Callable
 from grammar_reward import score_hindi
 from meaning_reward import score_against_reference
 from path_reward import score_path
+from lessons import LessonStore, best_fragment
 
 Generator = Callable[[str, int], str]
 
@@ -114,10 +115,14 @@ def answer_with_self_correction(
     threshold: float = 65.0,
     max_rounds: int = 3,
     seed: int = 0,
+    lessons: LessonStore | None = None,
 ) -> CorrectionResult:
     """Return an answer only if it clears `threshold`; otherwise refuse."""
     history: list[dict] = []
     tried = 0
+    # what the model has already been caught doing wrong, put in front of it
+    # before the first attempt rather than after
+    known = lessons.constraint() if lessons is not None else ""
     best: Candidate | None = None
     constraint = ""
 
@@ -126,7 +131,8 @@ def answer_with_self_correction(
         for c in range(candidates_per_round):
             # the constraint from the previous round is folded into the prompt,
             # so the generator sees what went wrong last time
-            effective_prompt = prompt if not constraint else f"{prompt}\n{constraint}"
+            parts = [piece for piece in (prompt, known, constraint) if piece]
+            effective_prompt = "\n".join(parts)
             text = generate(effective_prompt, seed + round_index * 100 + c)
             tried += 1
             cand = _score(prompt, text, reference)
@@ -148,6 +154,10 @@ def answer_with_self_correction(
         # go back: keep the grounded prefix, and tell the next round what broke
         prefix = _longest_grounded_prefix(prompt, round_best.text)
         reasons = "; ".join(round_best.notes) if round_best.notes else "उत्तर सटीक नहीं था"
+        if lessons is not None:
+            frag = best_fragment(prompt, round_best.text)
+            for note in round_best.notes:
+                lessons.record(note, prompt, round_best.text, fragment=frag)
         constraint = (f"पिछली कोशिश में यह गलती हुई: {reasons}. "
                       f"इसे सुधारें और सीधे उत्तर दें।")
         if prefix and len(prefix.split()) >= 3:
