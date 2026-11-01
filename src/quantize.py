@@ -62,16 +62,27 @@ def dequantize(packed: np.ndarray, scale: float, bits: int, shape) -> torch.Tens
 
 
 def roundtrip(model: HindiLM, bits: int) -> tuple[dict, int]:
-    """Return a state dict quantized to `bits` and the payload size in bytes."""
+    """Return a state dict quantized to `bits` and the payload size in bytes.
+
+    With weight sharing, `state_dict()` lists the same tensor once per alias --
+    six times for a six-layer shared stack. Counting each alias separately made
+    int8 report 11.27 MB against an 8.66 MB fp32 model, which is impossible.
+    Sizes are therefore counted once per unique storage.
+    """
     quantized: dict[str, torch.Tensor] = {}
+    seen_storage: set[int] = set()
     payload = 0
     for name, tensor in model.state_dict().items():
+        unique = tensor.data_ptr() not in seen_storage
+        seen_storage.add(tensor.data_ptr())
         if tensor.dim() < 2:  # norms and biases stay exact
             quantized[name] = tensor
-            payload += tensor.numel() * 4
+            if unique:
+                payload += tensor.numel() * 4
             continue
         packed, scale = quantize_tensor(tensor, bits)
-        payload += packed.nbytes + 4  # +4 bytes for the float32 scale
+        if unique:
+            payload += packed.nbytes + 4  # +4 bytes for the float32 scale
         quantized[name] = dequantize(packed, scale, bits, tuple(tensor.shape))
     return quantized, payload
 
@@ -92,7 +103,13 @@ def perplexity(model, tok, pairs, seq_len, batch=8) -> float:
                                ignore_index=tok.pad, reduction="sum")
         total += float(loss)
         tokens += int((tensor[:, 1:] != tok.pad).sum())
-    return math.exp(total / max(tokens, 1))
+    mean = total / max(tokens, 1)
+    try:
+        return math.exp(mean)
+    except OverflowError:
+        # a 4-bit round trip can push the loss past exp's range; that is a real
+        # result, not a crash, so report it as infinity
+        return float("inf")
 
 
 def main() -> None:
@@ -121,19 +138,25 @@ def main() -> None:
     print(f"fp32: {parameters * 4 / 1e6:.2f} MB, perplexity {baseline:.3f}")
 
     for bits in (8, 4):
-        quantized, payload = roundtrip(model, bits)
-        model.load_state_dict(quantized)
-        model.eval()
-        ppl = perplexity(model, tok, pairs, cfg["seq_len"])
-        report["variants"][f"int{bits}"] = {
-            "bytes": payload,
-            "megabytes": round(payload / 1e6, 2),
-            "perplexity": round(ppl, 3),
-            "degradation": round(ppl - baseline, 3),
-        }
-        print(f"int{bits}: {payload / 1e6:.2f} MB, perplexity {ppl:.3f} "
-              f"(+{ppl - baseline:.3f})")
-        model.load_state_dict(state["model"])  # restore for the next variant
+        try:
+            quantized, payload = roundtrip(model, bits)
+            model.load_state_dict(quantized)
+            model.eval()
+            ppl = perplexity(model, tok, pairs, cfg["seq_len"])
+            report["variants"][f"int{bits}"] = {
+                "bytes": payload,
+                "megabytes": round(payload / 1e6, 2),
+                "perplexity": round(ppl, 3) if math.isfinite(ppl) else None,
+                "degradation": round(ppl - baseline, 3) if math.isfinite(ppl) else None,
+                "note": None if math.isfinite(ppl) else "perplexity overflowed to infinity",
+            }
+            print(f"int{bits}: {payload / 1e6:.2f} MB, perplexity {ppl:.3f} "
+                  f"(+{ppl - baseline:.3f})")
+        except Exception as exc:  # noqa: BLE001 -- one bad variant must not lose the report
+            report["variants"][f"int{bits}"] = {"error": f"{type(exc).__name__}: {exc}"}
+            print(f"int{bits}: failed ({type(exc).__name__}: {exc})")
+        finally:
+            model.load_state_dict(state["model"])  # restore for the next variant
 
     args.out.write_text(json.dumps(report, indent=2))
     print(f"wrote {args.out}")
