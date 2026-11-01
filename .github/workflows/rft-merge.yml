@@ -68,9 +68,20 @@ jobs:
           sha256sum runs/base_frozen.pt | tee runs/base.sha256
           echo "base frozen; every later write goes to a different file"
 
+      - name: Show exactly what was checked out
+        run: |
+          echo "commit: $(git rev-parse HEAD)"
+          git log -1 --oneline
+          echo "--- eval_path.py options as checked out ---"
+          python src/eval_path.py --help | head -20
+          echo "--- rft.py options as checked out ---"
+          python src/rft.py --help | grep -c fragment-mode || true
+
       - name: Path score BEFORE
-        run: python src/eval_path.py --checkpoint runs/base_frozen.pt \
-               --out runs/path_before.json --limit 150 --max-new 80
+        run: |
+          python src/eval_path.py --checkpoint runs/base_frozen.pt \
+            --prompts data/multi_heldout.jsonl \
+            --out runs/path_before.json --limit 150 --max-new 80
 
       - name: Sample the model's own best spans, skipping what it already knows
         run: |
