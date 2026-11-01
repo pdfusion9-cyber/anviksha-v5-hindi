@@ -79,6 +79,9 @@ jobs:
       - name: Fetch Hindi instruction data
         run: python src/fetch_multi.py
 
+      # Measured on these runners: threads 2 gave 0.42 s/step, threads 4 gave
+      # 2.39 s/step for identical work -- 5.7x slower. The 4 vCPU are shared and
+      # oversubscribed, so asking PyTorch for 4 threads thrashes.
       - name: Report CPU clock
         run: |
           python - <<'PY'
@@ -99,7 +102,7 @@ jobs:
             --text-chars ${{ inputs.pretrain_chars }} \
             --dim ${{ inputs.dim }} --layers ${{ inputs.layers }} \
             --heads ${{ inputs.heads }} --ffn ${{ inputs.ffn }} \
-            --seq-len 128 --batch 8 --steps 1000000 --threads 4 \
+            --seq-len 128 --batch 8 --steps 1000000 --threads 2 \
             --checkpoint-every 500 \
             --time-budget $(( ${{ inputs.pretrain_minutes }} * 60 )) \
             ${{ inputs.share_blocks == '1' && '--share-blocks' || '' }} \
@@ -110,7 +113,7 @@ jobs:
           python src/train.py --stage chat \
             --dim ${{ inputs.dim }} --layers ${{ inputs.layers }} \
             --heads ${{ inputs.heads }} --ffn ${{ inputs.ffn }} \
-            --seq-len 128 --batch 8 --lr 3e-4 --threads 4 \
+            --seq-len 128 --batch 8 --lr 3e-4 --threads 2 \
             --checkpoint-every 200 \
             --chat data/multi_train.jsonl \
             --target-steps ${{ inputs.target_steps }} \
