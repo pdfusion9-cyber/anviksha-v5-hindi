@@ -122,6 +122,9 @@ def main() -> None:
 
     tok = CharTokenizer.load(args.checkpoint.parent / "tokenizer.json")
     model, cfg = build_from_checkpoint(args.checkpoint, tok)
+    # keep the untouched weights: each variant restores from here, and `state`
+    # no longer exists now that construction lives in build_from_checkpoint
+    original_weights = torch.load(args.checkpoint, weights_only=False)["model"]
 
     pairs = [json.loads(line) for line in args.heldout.read_text(encoding="utf-8").splitlines()
              if line.strip()][: args.limit]
@@ -156,7 +159,7 @@ def main() -> None:
             report["variants"][f"int{bits}"] = {"error": f"{type(exc).__name__}: {exc}"}
             print(f"int{bits}: failed ({type(exc).__name__}: {exc})")
         finally:
-            model.load_state_dict(state["model"])  # restore for the next variant
+            model.load_state_dict(original_weights)  # restore for the next variant
 
     args.out.write_text(json.dumps(report, indent=2))
     print(f"wrote {args.out}")
