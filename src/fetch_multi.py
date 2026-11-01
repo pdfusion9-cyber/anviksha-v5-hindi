@@ -37,7 +37,7 @@ def download(url: str, name: str) -> Path:
     return path
 
 
-def from_messages(path: Path, source: str, max_prompt: int, max_reply: int, cap: int = 12000) -> list[dict]:
+def from_messages(path: Path, source: str, max_prompt: int, max_reply: int, cap: int = 25000) -> list[dict]:
     """Extract pairs; kept in memory only for one source at a time."""
     pairs, seen = [], set()
     handle = pq.ParquetFile(path)
@@ -59,7 +59,7 @@ def from_messages(path: Path, source: str, max_prompt: int, max_reply: int, cap:
     return pairs
 
 
-def from_columns(path: Path, source: str, max_prompt: int, max_reply: int, cap: int = 12000) -> list[dict]:
+def from_columns(path: Path, source: str, max_prompt: int, max_reply: int, cap: int = 25000) -> list[dict]:
     """Handles both column namings in use: instruction/response and inputs/targets."""
     pairs, seen = [], set()
     handle = pq.ParquetFile(path)
@@ -91,8 +91,8 @@ def main() -> None:
     parser.add_argument("--out", default="data", type=Path)
     parser.add_argument("--max-prompt", default=100, type=int)
     parser.add_argument("--max-reply", default=140, type=int)
-    parser.add_argument("--heldout", default=500, type=int)
-    parser.add_argument("--cap", default=12000, type=int, help="max pairs per source")
+    parser.add_argument("--heldout", default=1000, type=int)
+    parser.add_argument("--cap", default=25000, type=int, help="max pairs per source")
     args = parser.parse_args()
 
     extractors = {
@@ -100,6 +100,14 @@ def main() -> None:
         "dolly": (from_columns, download(f"{BASE}/dolly/hi-00000-of-00001.parquet", "dolly.parquet")),
         "anudesh": (from_messages, download(f"{BASE}/anudesh/hi-00000-of-00001.parquet", "anudesh.parquet")),
         "flan_v2": (from_columns, download(f"{BASE}/flan_v2/hi-00000-of-00001.parquet", "flan.parquet")),
+        # real user-assistant conversations: closest thing here to the queries
+        # the model will actually receive
+        "lm_sys": (from_messages, download(f"{BASE}/lm_sys/hi-00000-of-00001.parquet", "lm_sys.parquet")),
+        # human-written assistant replies, not machine translation
+        "oasst1": (from_messages, download(f"{BASE}/oasst1/hi-00000-of-00001.parquet", "oasst1.parquet")),
+        # procedural how-to text: the only source with an explicit step structure,
+        # which is what a path reward can actually score
+        "wikihow": (from_messages, download(f"{BASE}/wikihow/hi-00000-of-00001.parquet", "wikihow.parquet")),
     }
 
     # one source at a time, appended to disk, so peak memory stays flat
