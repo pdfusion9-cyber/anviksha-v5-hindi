@@ -1,0 +1,144 @@
+name: rft-train
+
+# Fine-tune on the rejection-sampled corpus, then measure whether the rewards
+# actually improved rather than assuming they did.
+#
+# The RFT corpus alone is tiny (a few hundred replies), so training on it by
+# itself would wreck general ability. It is mixed with the main corpus, with the
+# RFT pairs repeated so they carry weight without drowning the rest.
+
+on:
+  workflow_dispatch:
+    inputs:
+      train_run_id:
+        description: "run id whose artifact holds the checkpoint to fine-tune"
+        required: true
+      rft_run_id:
+        description: "run id whose artifact holds data/rft_train.jsonl"
+        required: true
+      steps:
+        description: "fine-tuning steps"
+        required: true
+        default: "900"
+      rft_repeat:
+        description: "how many times to repeat each RFT pair in the mix"
+        required: true
+        default: "8"
+
+jobs:
+  rft-train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy pyarrow
+
+      - name: Fetch the corpus
+        run: python src/fetch_multi.py
+
+      - name: Pull the checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: v5-hindi-run
+          path: runs
+          run-id: ${{ inputs.train_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the RFT corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: v5-hindi-rft
+          path: rft
+          run-id: ${{ inputs.rft_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Measure the path score BEFORE fine-tuning
+        run: |
+          python src/eval_path.py --checkpoint runs/chat.pt \
+            --out runs/path_before.json --limit 150 --max-new 80
+
+      - name: Build the mix and fine-tune
+        run: |
+          python - <<'PY'
+          import json, random
+          from pathlib import Path
+
+          rft = [json.loads(l) for l in
+                 Path("rft/data/rft_train.jsonl").read_text(encoding="utf-8").splitlines()
+                 if l.strip()]
+          main = [json.loads(l) for l in
+                  Path("data/multi_train.jsonl").read_text(encoding="utf-8").splitlines()
+                  if l.strip()]
+          repeat = int("${{ inputs.rft_repeat }}")
+          random.seed(0)
+          sample_main = random.sample(main, min(2500, len(main)))
+          mix = rft * repeat + sample_main
+          random.shuffle(mix)
+          Path("data/rft_mix.jsonl").write_text(
+              "\n".join(json.dumps(r, ensure_ascii=False) for r in mix) + "\n",
+              encoding="utf-8")
+          print(f"rft {len(rft)} x{repeat} + main {len(sample_main)} = {len(mix)} pairs")
+          if not rft:
+              raise SystemExit("RFT corpus is empty; fine-tuning would teach nothing")
+          PY
+          python src/train.py --stage chat --chat data/rft_mix.jsonl \
+            --out runs --steps ${{ inputs.steps }} --lr 1.5e-4 \
+            --dim 384 --layers 6 --heads 6 --ffn 1536 --seq-len 128 \
+            --batch 8 --threads 2 --share-blocks --checkpoint-every 300
+
+      - name: Measure the path score AFTER fine-tuning
+        run: |
+          python src/eval_path.py --checkpoint runs/chat.pt \
+            --out runs/path_after.json --limit 150 --max-new 80
+
+      - name: Held-out and unseen perplexity
+        run: |
+          python src/eval_chat.py --checkpoint runs/chat.pt \
+            --heldout data/multi_heldout.jsonl --limit 200 --generate 20 || true
+          python src/eval_unseen.py --checkpoint runs/chat.pt \
+            --parquet data/unseen_hh.jsonl --limit 150 || true
+
+      - name: Compare before and after
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          b = json.loads(Path("runs/path_before.json").read_text())
+          a = json.loads(Path("runs/path_after.json").read_text())
+          rows = [("path_mean", b.get("path_mean"), a.get("path_mean")),
+                  ("form_mean", b.get("form_mean"), a.get("form_mean")),
+                  ("answer_mean", b.get("answer_mean"), a.get("answer_mean")),
+                  ("path_ge_60", b.get("path_ge_60"), a.get("path_ge_60")),
+                  ("empty_replies", b.get("empty_replies"), a.get("empty_replies"))]
+          print(f"{'metric':16} {'before':>8} {'after':>8}   change")
+          for name, before, after in rows:
+              if before is None or after is None:
+                  print(f"{name:16} {str(before):>8} {str(after):>8}")
+                  continue
+              print(f"{name:16} {before:>8} {after:>8}   {after - before:+.2f}")
+          PY
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-hindi-rft-train
+          path: |
+            runs/chat.pt
+            runs/tokenizer.json
+            runs/path_before.json
+            runs/path_after.json
+            runs/eval.json
+            runs/unseen_eval.json
+            data/rft_mix.jsonl
