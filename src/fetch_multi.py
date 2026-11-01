@@ -18,6 +18,7 @@ import argparse
 import json
 import random
 import subprocess
+from urllib.parse import unquote
 import urllib.request
 from pathlib import Path
 
@@ -86,6 +87,53 @@ def from_columns(path: Path, source: str, max_prompt: int, max_reply: int, cap: 
     return pairs
 
 
+def _truncate(text: str, limit: int) -> str:
+    """Cut at a sentence boundary so a short reply is still a whole sentence."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    for mark in ("।", ".", "?", "!"):
+        idx = cut.rfind(mark)
+        if idx >= limit // 2:
+            return cut[: idx + 1]
+    return cut.rstrip() + "।"
+
+
+def from_wikihow(path: Path, source: str, max_prompt: int, max_reply: int,
+                 cap: int = 25000) -> list[dict]:
+    """WikiHow keeps the entire article as the reply, so the generic reader
+    rejects every row: the prompt is a percent-encoded title and the reply runs
+    to a median of 1,286 characters. The first step is a complete, short answer,
+    and the step structure is exactly what the path reward needs."""
+    pairs, seen = [], set()
+    handle = pq.ParquetFile(path)
+    for batch in handle.iter_batches(batch_size=64,
+                                     columns=["messages", "steps"]):
+        for row in batch.to_pylist():
+            msgs = row.get("messages") or []
+            if not msgs:
+                continue
+            user = unquote(msgs[0].get("content", "")).strip()
+            steps = row.get("steps") or []
+            if steps:
+                reply = _truncate(steps[0].get("description", "") or "", max_reply)
+            elif len(msgs) > 1:
+                reply = _truncate(unquote(msgs[1].get("content", "")), max_reply)
+            else:
+                continue
+            if not user or not reply or len(user) > max_prompt or len(reply) < 12:
+                continue
+            key = (user, reply)
+            if key in seen:
+                continue
+            seen.add(key)
+            pairs.append({"user": user, "assistant": reply, "source": source})
+            if len(pairs) >= cap:
+                return pairs
+    return pairs
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="data", type=Path)
@@ -107,7 +155,7 @@ def main() -> None:
         "oasst1": (from_messages, download(f"{BASE}/oasst1/hi-00000-of-00001.parquet", "oasst1.parquet")),
         # procedural how-to text: the only source with an explicit step structure,
         # which is what a path reward can actually score
-        "wikihow": (from_messages, download(f"{BASE}/wikihow/hi-00000-of-00001.parquet", "wikihow.parquet")),
+        "wikihow": (from_wikihow, download(f"{BASE}/wikihow/hi-00000-of-00001.parquet", "wikihow.parquet")),
     }
 
     # one source at a time, appended to disk, so peak memory stays flat

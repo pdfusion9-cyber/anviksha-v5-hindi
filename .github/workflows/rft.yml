@@ -1,0 +1,107 @@
+name: rft
+
+# Rejection-sampling fine-tuning on a trained checkpoint.
+#
+# Takes a checkpoint from a previous training run, asks it for several replies
+# per prompt, keeps only the ones the rewards accept, and writes the survivors
+# as a chat corpus. Also records every flaw it saw and files the best fragment
+# of each rejected reply, so nothing is thrown away.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "run id whose artifact holds the checkpoint to improve"
+        required: true
+      candidates:
+        description: "replies sampled per prompt"
+        required: true
+        default: "4"
+      threshold:
+        description: "minimum combined score to keep a reply"
+        required: true
+        default: "60"
+      limit:
+        description: "how many prompts to sample"
+        required: true
+        default: "600"
+      max_new:
+        description: "characters to generate per reply"
+        required: true
+        default: "80"
+
+jobs:
+  rft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy pyarrow
+
+      - name: Fetch the corpus (prompts to sample from)
+        run: python src/fetch_multi.py
+
+      - name: Pull the checkpoint from run ${{ inputs.source_run_id }}
+        uses: actions/download-artifact@v4
+        with:
+          name: v5-hindi-run
+          path: runs
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rejection-sampling fine-tuning
+        run: |
+          python src/rft.py \
+            --checkpoint runs/chat.pt \
+            --prompts data/multi_heldout.jsonl \
+            --out data/rft_train.jsonl \
+            --report runs/rft_report.json \
+            --lessons data/lessons.jsonl \
+            --fragments data/analysis/fragments.jsonl \
+            --limit ${{ inputs.limit }} \
+            --candidates ${{ inputs.candidates }} \
+            --threshold ${{ inputs.threshold }} \
+            --max-new ${{ inputs.max_new }} \
+            --threads 2
+
+      - name: Check RFT produced a usable corpus
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          report = pathlib.Path("runs/rft_report.json")
+          if not report.exists():
+              print("::error::rft produced no report")
+              raise SystemExit(1)
+          data = json.loads(report.read_text())
+          print(json.dumps(data, indent=2))
+          if data["kept"] == 0:
+              print("::warning::no reply cleared the threshold; the corpus is empty "
+                    "and training on it would teach nothing")
+          corpus = pathlib.Path("data/rft_train.jsonl")
+          if not corpus.exists():
+              print("::error::no corpus written")
+              raise SystemExit(1)
+          print(f"corpus lines: {len(corpus.read_text().strip().splitlines())}")
+          PY
+
+      - name: Upload RFT results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-hindi-rft
+          path: |
+            data/rft_train.jsonl
+            data/lessons.jsonl
+            data/analysis/fragments.jsonl
+            runs/rft_report.json
