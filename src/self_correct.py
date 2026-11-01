@@ -55,6 +55,10 @@ class CorrectionResult:
 
 
 def _score(prompt: str, reply: str, reference: str | None) -> Candidate:
+    if len(reply.strip()) < 2:
+        # never let an empty candidate through on a technicality
+        return Candidate(text=reply, combined=0.0, path=0.0, form=0.0,
+                         answer=None, notes=["empty reply"])
     path = score_path(prompt, reply)
     form = score_hindi(reply)
     answer = score_against_reference(reply, reference) if reference else None

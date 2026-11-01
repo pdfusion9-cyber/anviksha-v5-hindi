@@ -61,6 +61,13 @@ def score_path(prompt: str, reply: str) -> PathScore:
     notes: list[str] = []
     checks: dict[str, bool] = {}
 
+    # An empty reply passes every check vacuously -- no words means no loop, no
+    # shape mismatch, no dangling end -- and scored 95/100 when this was first
+    # tested. It has to be caught before the checks, not after.
+    if len(reply) < 2:
+        return PathScore(score=0.0, checks={"non_empty": False},
+                         notes=["empty reply"])
+
     words = _words(reply)
     prompt_words = _content_words(prompt)
     reply_words = _content_words(reply)
@@ -107,7 +114,7 @@ def score_path(prompt: str, reply: str) -> PathScore:
 
     # 6. length plausibility relative to the question
     ratio = len(reply) / max(len(prompt), 1)
-    checks["length_plausible"] = 0.2 <= ratio <= 8.0
+    checks["length_plausible"] = 0.2 <= ratio <= 8.0 and len(reply) >= 8
     if not checks["length_plausible"]:
         notes.append(f"reply/question length ratio {ratio:.1f}")
 
@@ -122,6 +129,13 @@ def score_path(prompt: str, reply: str) -> PathScore:
     }
     assert sum(weights.values()) == 100, sum(weights.values())
     score = sum(w for k, w in weights.items() if checks.get(k, False))
+
+    # Two words pass nearly every check by having nothing to fail. A route that
+    # short cannot be judged, so it must not score like a real answer.
+    if len(words) < 4:
+        notes.append(f"only {len(words)} words -- too short to judge the route")
+        score = min(score, 40)
+
     return PathScore(score=score, checks=checks, notes=notes)
 
 
