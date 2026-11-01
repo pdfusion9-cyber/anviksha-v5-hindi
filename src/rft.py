@@ -57,6 +57,12 @@ def sample(model, tokenizer, cfg, prompt: str, temperature: float, top_k: int,
     return tokenizer.decode(tokens[0, len(ids):].tolist())
 
 
+def _norm(text: str) -> str:
+    """Coarse normalisation so near-identical replies collapse to one key."""
+    import re
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
 def score(prompt: str, reply: str, reference: str | None) -> tuple[float, dict]:
     if len(reply.strip()) < 2:
         return 0.0, {"path": 0.0, "form": 0.0, "answer": None, "notes": ["empty reply"]}
@@ -92,6 +98,10 @@ def main() -> None:
                         help="persistent record of flaws, deduplicated and counted")
     parser.add_argument("--fragments", default="data/analysis/fragments.jsonl", type=Path,
                         help="best span from each rejected reply, for deeper analysis")
+    parser.add_argument("--fragment-mode", action="store_true",
+                        help="keep only the best span of the winning reply, not the whole reply")
+    parser.add_argument("--dedupe-against", default="data/multi_train.jsonl", type=Path,
+                        help="skip a fragment that already exists in this corpus")
     args = parser.parse_args()
     torch.set_num_threads(args.threads)
 
@@ -104,6 +114,16 @@ def main() -> None:
 
     lessons = LessonStore(args.lessons)
     fragments = []
+    # existing knowledge, so a fragment is only added if it is genuinely new
+    existing = set()
+    if args.dedupe_against.exists():
+        for line in args.dedupe_against.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            existing.add(_norm(row.get("assistant", "")))
+    print(f"dedupe against {len(existing)} existing replies")
+
     kept, tried, scores = [], 0, []
     for i, row in enumerate(rows):
         prompt = row["user"]
@@ -127,7 +147,17 @@ def main() -> None:
                                   "best_fragment": frag, "flaws": detail["notes"]})
         scores.append(best[0])
         if best[0] >= args.threshold:
-            kept.append({"user": prompt, "assistant": best[1],
+            text = best[1]
+            if args.fragment_mode:
+                # the best span of the best reply: higher precision, less noise
+                frag = best_fragment(prompt, text)
+                if frag:
+                    text = frag
+            key = _norm(text)
+            if key in existing:
+                continue  # already known, adding it again would only reinforce
+            existing.add(key)
+            kept.append({"user": prompt, "assistant": text,
                          "score": round(best[0], 1), "source": "rft"})
         if (i + 1) % 50 == 0:
             print(f"  {i + 1}/{len(rows)} prompts, kept {len(kept)}")
@@ -145,6 +175,8 @@ def main() -> None:
         "threshold": args.threshold,
         "mean_best_score": round(sum(scores) / max(len(scores), 1), 1),
         "max_best_score": round(max(scores), 1) if scores else None,
+        "fragment_mode": bool(args.fragment_mode),
+        "existing_replies_compared": len(existing),
         "rejected_analysed": len(fragments),
         "lessons": lessons.summary(),
     }

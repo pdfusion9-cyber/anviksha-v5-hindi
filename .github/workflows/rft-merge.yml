@@ -1,0 +1,185 @@
+name: rft-merge
+
+# Learn only the best span of the model's own best replies, skip anything it
+# already knows, and merge the result into a separate branch -- never over the
+# saved checkpoint.
+#
+# The previous attempt overwrote a good checkpoint with a worse one. This run
+# cannot: the base is only read, the candidate and the merged model are separate
+# files, and all three are scored before anything is chosen.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_run_id:
+        description: "run id whose artifact holds the checkpoint to improve"
+        required: true
+      limit:
+        description: "prompts to sample (more prompts = more distinct fragments)"
+        required: true
+        default: "2500"
+      candidates:
+        description: "replies sampled per prompt"
+        required: true
+        default: "4"
+      threshold:
+        description: "minimum combined score to keep a reply"
+        required: true
+        default: "75"
+      steps:
+        description: "fine-tuning steps on the fragment corpus"
+        required: true
+        default: "400"
+      lr:
+        description: "fine-tuning learning rate (low, so the base is nudged not broken)"
+        required: true
+        default: "0.00005"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy pyarrow
+
+      - name: Fetch the corpus
+        run: python src/fetch_multi.py
+
+      - name: Pull the base checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: v5-hindi-run
+          path: runs
+          run-id: ${{ inputs.base_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Freeze a copy of the base so it cannot be touched
+        run: |
+          cp runs/chat.pt runs/base_frozen.pt
+          sha256sum runs/base_frozen.pt | tee runs/base.sha256
+          echo "base frozen; every later write goes to a different file"
+
+      - name: Path score BEFORE
+        run: python src/eval_path.py --checkpoint runs/base_frozen.pt \
+               --out runs/path_before.json --limit 150 --max-new 80
+
+      - name: Sample the model's own best spans, skipping what it already knows
+        run: |
+          python src/rft.py \
+            --checkpoint runs/base_frozen.pt \
+            --prompts data/multi_heldout.jsonl \
+            --out data/rft_fragments.jsonl \
+            --report runs/rft_report.json \
+            --lessons data/lessons.jsonl \
+            --fragments data/analysis/fragments.jsonl \
+            --fragment-mode \
+            --dedupe-against data/multi_train.jsonl \
+            --limit ${{ inputs.limit }} \
+            --candidates ${{ inputs.candidates }} \
+            --threshold ${{ inputs.threshold }} \
+            --max-new 80 \
+            --threads 2
+
+      - name: Fine-tune into a candidate file, base untouched
+        run: |
+          python - <<'PY'
+          import json, random
+          from pathlib import Path
+          frags = [json.loads(l) for l in
+                   Path("data/rft_fragments.jsonl").read_text(encoding="utf-8").splitlines()
+                   if l.strip()]
+          if not frags:
+              raise SystemExit("no fragments cleared the threshold; nothing to learn")
+          main = [json.loads(l) for l in
+                  Path("data/multi_train.jsonl").read_text(encoding="utf-8").splitlines()
+                  if l.strip()]
+          random.seed(0)
+          # the FULL corpus, not a sample: the last attempt broke general ability by
+          # swapping 20k pairs for 2.5k
+          mix = frags * 4 + main
+          random.shuffle(mix)
+          Path("data/rft_frag_mix.jsonl").write_text(
+              "\n".join(json.dumps(r, ensure_ascii=False) for r in mix) + "\n",
+              encoding="utf-8")
+          print(f"fragments {len(frags)} x4 + full main {len(main)} = {len(mix)}")
+          PY
+          mkdir -p runs/candidate
+          cp runs/tokenizer.json runs/candidate/tokenizer.json
+          python src/train.py --stage chat --chat data/rft_frag_mix.jsonl \
+            --out runs/candidate --steps ${{ inputs.steps }} --lr ${{ inputs.lr }} \
+            --dim 384 --layers 6 --heads 6 --ffn 1536 --seq-len 128 \
+            --batch 8 --threads 2 --share-blocks --checkpoint-every 200
+          echo "candidate written to runs/candidate/chat.pt"
+
+      - name: Score base, candidate and every merge, then pick the winner
+        run: |
+          python src/merge.py \
+            --base runs/base_frozen.pt \
+            --candidate runs/candidate/chat.pt \
+            --heldout data/multi_heldout.jsonl \
+            --out runs/merged.pt \
+            --decision runs/merge_decision.json \
+            --limit 150 --threads 2
+          cp runs/tokenizer.json runs/tokenizer_merged.json
+
+      - name: Path score AFTER, on whatever won
+        run: |
+          python src/eval_path.py --checkpoint runs/merged.pt \
+            --out runs/path_after.json --limit 150 --max-new 80
+
+      - name: Prove the base checkpoint is byte-identical
+        if: always()
+        run: |
+          sha256sum -c runs/base.sha256
+          echo "base checkpoint verified unchanged"
+
+      - name: Summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          b = json.loads(Path("runs/path_before.json").read_text())
+          a = json.loads(Path("runs/path_after.json").read_text())
+          d = json.loads(Path("runs/merge_decision.json").read_text())
+          r = json.loads(Path("runs/rft_report.json").read_text())
+          print(f"fragments kept: {r['kept']} of {r['prompts']} prompts "
+                f"({r['kept_fraction']:.1%}), threshold {r['threshold']}")
+          print(f"merge winner: alpha={d['winner_alpha']} "
+                f"ppl {d['winner_perplexity']} (base {d['base_perplexity']})")
+          print(f"base kept: {d['base_was_kept']}")
+          print(f"{'metric':16} {'before':>8} {'after':>8}   change")
+          for name in ("path_mean", "form_mean", "answer_mean", "path_ge_60"):
+              x, y = b.get(name), a.get(name)
+              if x is None or y is None:
+                  print(f"{name:16} {str(x):>8} {str(y):>8}")
+              else:
+                  print(f"{name:16} {x:>8} {y:>8}   {y - x:+.2f}")
+          PY
+
+      - name: Upload base, candidate and merged separately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-hindi-merge
+          path: |
+            runs/base_frozen.pt
+            runs/candidate/chat.pt
+            runs/merged.pt
+            runs/tokenizer.json
+            runs/merge_decision.json
+            runs/path_before.json
+            runs/path_after.json
+            runs/rft_report.json
+            data/rft_fragments.jsonl
+            data/lessons.jsonl
+            data/analysis/fragments.jsonl
