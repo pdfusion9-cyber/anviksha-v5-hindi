@@ -66,6 +66,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hippocampus", action="store_true")
     p.add_argument("--hippocampus-fraction", default=0.25, type=float)
     p.add_argument("--reward-weighting", action="store_true")
+    p.add_argument("--cross-links", action="store_true",
+                   help="each block also sees a running average of all earlier layer "
+                        "outputs; no new parameters")
+    p.add_argument("--recurrent", default=1, type=int,
+                   help="apply the block stack N times with a step embedding; buys "
+                        "effective depth for recurrent x dim parameters")
     p.add_argument("--init-from", default=None, type=Path,
                    help="checkpoint to start from. Without this the chat stage looks "
                         "for <out>/pretrain.pt and silently starts from random weights "
@@ -79,7 +85,9 @@ def parse_args() -> argparse.Namespace:
 def build_model(tokenizer: CharTokenizer, args) -> HindiLM:
     return HindiLM(tokenizer.size, args.dim, args.layers, args.heads, args.ffn,
                    args.seq_len, share_blocks=args.share_blocks,
-                   multi_level=args.multi_level, criticality=args.criticality)
+                   multi_level=args.multi_level, criticality=args.criticality,
+                   cross_links=getattr(args, "cross_links", False),
+                   recurrent=getattr(args, "recurrent", 1))
 
 
 def load_model(path: Path, tokenizer: CharTokenizer, args,

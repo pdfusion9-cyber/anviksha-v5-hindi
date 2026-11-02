@@ -31,6 +31,8 @@ def build_from_checkpoint(path: Path, tokenizer) -> tuple[HindiLM, dict]:
         share_blocks=bool(args.get("share_blocks", False)),
         multi_level=bool(args.get("multi_level", False)),
         criticality=bool(args.get("criticality", False)),
+        cross_links=bool(args.get("cross_links", False)),
+        recurrent=int(args.get("recurrent", 1)),
     )
     model.load_state_dict(state["model"])
     model.eval()

@@ -96,7 +96,8 @@ class HindiLM(nn.Module):
     def __init__(self, vocab: int, dim: int = 192, layers: int = 4, heads: int = 4,
                  ffn: int = 768, seq_len: int = 192, dropout: float = 0.1,
                  share_blocks: bool = False, multi_level: bool = False,
-                 criticality: bool = False):
+                 criticality: bool = False, cross_links: bool = False,
+                 recurrent: int = 1):
         super().__init__()
         self.embed = nn.Embedding(vocab, dim)
         self.position = nn.Embedding(seq_len, dim)
@@ -113,6 +114,13 @@ class HindiLM(nn.Module):
 
         self.seq_len = seq_len
         self.share_blocks = share_blocks
+        self.cross_links = cross_links
+        # recurrent depth: apply the block stack N times, told apart only by a
+        # small step embedding. Costs recurrent x dim parameters (a few thousand)
+        # and buys effective depth that would otherwise cost a whole block.
+        self.recurrent = max(1, int(recurrent))
+        self.step_embed = (nn.Embedding(self.recurrent, dim)
+                           if self.recurrent > 1 else None)
         self.multi_level = multi_level
         self.use_criticality = criticality
 
@@ -130,14 +138,27 @@ class HindiLM(nn.Module):
 
         aux_logits = []
         sparsity = []
-        for index, block in enumerate(self.blocks):
-            x = block(x, mask)
-            if self.controller is not None:
-                self.controller.measure(x, index)
-                x = x * self.controller.gain[index]
-            if self.multi_level:
-                aux_logits.append(self.aux_head(self.aux_norm(x)))
-                sparsity.append(x.detach().abs().mean().item())
+        # running average of every earlier layer output: each block sees a summary
+        # of the whole depth below it, not only the residual that reaches it. No
+        # new parameters -- this is the cross-link.
+        memory = torch.zeros_like(x)
+        seen = 0
+        for step in range(self.recurrent):
+            if self.step_embed is not None:
+                x = x + self.step_embed.weight[step][None, None, :]
+            for index, block in enumerate(self.blocks):
+                if self.cross_links:
+                    x = block(x + memory, mask)
+                    seen += 1
+                    memory = memory + (x - memory) / seen
+                else:
+                    x = block(x, mask)
+                if self.controller is not None:
+                    self.controller.measure(x, index)
+                    x = x * self.controller.gain[index]
+                if self.multi_level:
+                    aux_logits.append(self.aux_head(self.aux_norm(x)))
+                    sparsity.append(x.detach().abs().mean().item())
 
         logits = self.head(self.norm(x))
         if return_aux:
