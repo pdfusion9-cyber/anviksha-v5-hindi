@@ -18,7 +18,6 @@ import argparse
 import json
 import random
 import subprocess
-from urllib.parse import unquote
 import urllib.request
 from pathlib import Path
 
@@ -38,7 +37,7 @@ def download(url: str, name: str) -> Path:
     return path
 
 
-def from_messages(path: Path, source: str, max_prompt: int, max_reply: int, cap: int = 25000) -> list[dict]:
+def from_messages(path: Path, source: str, max_prompt: int, max_reply: int, cap: int = 12000) -> list[dict]:
     """Extract pairs; kept in memory only for one source at a time."""
     pairs, seen = [], set()
     handle = pq.ParquetFile(path)
@@ -60,21 +59,13 @@ def from_messages(path: Path, source: str, max_prompt: int, max_reply: int, cap:
     return pairs
 
 
-def from_columns(path: Path, source: str, max_prompt: int, max_reply: int, cap: int = 25000) -> list[dict]:
-    """Handles both column namings in use: instruction/response and inputs/targets."""
+def from_columns(path: Path, source: str, max_prompt: int, max_reply: int, cap: int = 12000) -> list[dict]:
     pairs, seen = [], set()
     handle = pq.ParquetFile(path)
-    names = set(handle.schema_arrow.names)
-    if {"instruction", "response"} <= names:
-        prompt_col, reply_col = "instruction", "response"
-    elif {"inputs", "targets"} <= names:
-        prompt_col, reply_col = "inputs", "targets"
-    else:
-        raise KeyError(f"no known prompt/reply columns in {sorted(names)}")
-    for batch in handle.iter_batches(batch_size=128, columns=[prompt_col, reply_col]):
+    for batch in handle.iter_batches(batch_size=128, columns=["instruction", "response"]):
         for row in batch.to_pylist():
-            user = (row[prompt_col] or "").strip()
-            assistant = (row[reply_col] or "").strip()
+            user = (row["instruction"] or "").strip()
+            assistant = (row["response"] or "").strip()
             if not (4 <= len(user) <= max_prompt and 4 <= len(assistant) <= max_reply):
                 continue
             key = user[:100]
@@ -87,60 +78,13 @@ def from_columns(path: Path, source: str, max_prompt: int, max_reply: int, cap: 
     return pairs
 
 
-def _truncate(text: str, limit: int) -> str:
-    """Cut at a sentence boundary so a short reply is still a whole sentence."""
-    text = text.strip()
-    if len(text) <= limit:
-        return text
-    cut = text[:limit]
-    for mark in ("।", ".", "?", "!"):
-        idx = cut.rfind(mark)
-        if idx >= limit // 2:
-            return cut[: idx + 1]
-    return cut.rstrip() + "।"
-
-
-def from_wikihow(path: Path, source: str, max_prompt: int, max_reply: int,
-                 cap: int = 25000) -> list[dict]:
-    """WikiHow keeps the entire article as the reply, so the generic reader
-    rejects every row: the prompt is a percent-encoded title and the reply runs
-    to a median of 1,286 characters. The first step is a complete, short answer,
-    and the step structure is exactly what the path reward needs."""
-    pairs, seen = [], set()
-    handle = pq.ParquetFile(path)
-    for batch in handle.iter_batches(batch_size=64,
-                                     columns=["messages", "steps"]):
-        for row in batch.to_pylist():
-            msgs = row.get("messages") or []
-            if not msgs:
-                continue
-            user = unquote(msgs[0].get("content", "")).strip()
-            steps = row.get("steps") or []
-            if steps:
-                reply = _truncate(steps[0].get("description", "") or "", max_reply)
-            elif len(msgs) > 1:
-                reply = _truncate(unquote(msgs[1].get("content", "")), max_reply)
-            else:
-                continue
-            if not user or not reply or len(user) > max_prompt or len(reply) < 12:
-                continue
-            key = (user, reply)
-            if key in seen:
-                continue
-            seen.add(key)
-            pairs.append({"user": user, "assistant": reply, "source": source})
-            if len(pairs) >= cap:
-                return pairs
-    return pairs
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="data", type=Path)
-    parser.add_argument("--max-prompt", default=100, type=int)
-    parser.add_argument("--max-reply", default=140, type=int)
-    parser.add_argument("--heldout", default=1000, type=int)
-    parser.add_argument("--cap", default=25000, type=int, help="max pairs per source")
+    parser.add_argument("--max-prompt", default=140, type=int)
+    parser.add_argument("--max-reply", default=260, type=int)
+    parser.add_argument("--heldout", default=500, type=int)
+    parser.add_argument("--cap", default=12000, type=int, help="max pairs per source")
     args = parser.parse_args()
 
     extractors = {
@@ -148,14 +92,6 @@ def main() -> None:
         "dolly": (from_columns, download(f"{BASE}/dolly/hi-00000-of-00001.parquet", "dolly.parquet")),
         "anudesh": (from_messages, download(f"{BASE}/anudesh/hi-00000-of-00001.parquet", "anudesh.parquet")),
         "flan_v2": (from_columns, download(f"{BASE}/flan_v2/hi-00000-of-00001.parquet", "flan.parquet")),
-        # real user-assistant conversations: closest thing here to the queries
-        # the model will actually receive
-        "lm_sys": (from_messages, download(f"{BASE}/lm_sys/hi-00000-of-00001.parquet", "lm_sys.parquet")),
-        # human-written assistant replies, not machine translation
-        "oasst1": (from_messages, download(f"{BASE}/oasst1/hi-00000-of-00001.parquet", "oasst1.parquet")),
-        # procedural how-to text: the only source with an explicit step structure,
-        # which is what a path reward can actually score
-        "wikihow": (from_wikihow, download(f"{BASE}/wikihow/hi-00000-of-00001.parquet", "wikihow.parquet")),
     }
 
     # one source at a time, appended to disk, so peak memory stays flat

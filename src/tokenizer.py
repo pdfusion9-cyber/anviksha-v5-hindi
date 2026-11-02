@@ -16,8 +16,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+# <think>/</think> and <ans> force every reply through a reasoning stage before
+# an answer is emitted, so the model cannot answer without a trace and the answer
+# can be extracted unambiguously.
 SPECIALS = ["<pad>", "<bos>", "<eos>", "<user>", "<assistant>", "<sep>",
-            "<hi>", "<en>", "<mix>"]
+            "<hi>", "<en>", "<mix>", "<think>", "</think>", "<ans>", "</ans>"]
 MAX_VOCAB = 1024
 
 

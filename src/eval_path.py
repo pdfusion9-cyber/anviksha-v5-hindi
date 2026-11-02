@@ -24,6 +24,7 @@ from checkpoint import build_from_checkpoint  # noqa: E402
 from grammar_reward import score_hindi  # noqa: E402
 from meaning_reward import score_against_reference  # noqa: E402
 from judge import judge  # noqa: E402
+from reasoning import parse  # noqa: E402
 from path_reward import score_path  # noqa: E402
 from tokenizer import CharTokenizer  # noqa: E402
 
@@ -71,9 +72,16 @@ def main() -> None:
     rows = rows[: args.limit]
 
     paths, forms, answers, empties, verdicts = [], [], [], 0, []
+    incomplete = 0
     for i, row in enumerate(rows):
-        reply = sample(model, tokenizer, cfg, row["user"], args.temperature,
-                       args.top_k, args.max_new, seed=i)
+        raw = sample(model, tokenizer, cfg, row["user"], args.temperature,
+                     args.top_k, args.max_new, seed=i)
+        # every reply must think first and answer inside <ans>; anything else
+        # is an unfinished thought, not an answer
+        parsed = parse(raw)
+        reply = parsed.answer
+        if not parsed.complete:
+            incomplete += 1
         if len(reply.strip()) < 2:
             empties += 1
         paths.append(score_path(row["user"], reply).score)
@@ -88,6 +96,7 @@ def main() -> None:
     report = {
         "prompts": len(rows),
         "empty_replies": empties,
+        "no_answer_block": incomplete,
         "path_mean": mean(paths),
         "form_mean": mean(forms),
         "answer_mean": mean(answers),

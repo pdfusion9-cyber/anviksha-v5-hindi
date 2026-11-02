@@ -30,6 +30,7 @@ from checkpoint import build_from_checkpoint  # noqa: E402
 from grammar_reward import score_hindi  # noqa: E402
 from meaning_reward import score_against_reference  # noqa: E402
 from judge import judge  # noqa: E402
+from reasoning import parse  # noqa: E402
 from lessons import LessonStore, best_fragment  # noqa: E402
 from tokenizer import CharTokenizer  # noqa: E402
 
@@ -125,10 +126,15 @@ def main() -> None:
         reference = row.get("assistant")
         best = None
         for c in range(args.candidates):
-            reply = sample(model, tokenizer, cfg, prompt, args.temperature,
-                           args.top_k, args.max_new, seed=i * 100 + c)
+            raw = sample(model, tokenizer, cfg, prompt, args.temperature,
+                         args.top_k, args.max_new, seed=i * 100 + c)
             tried += 1
+            # a reply with no <ans> block never answered, so it cannot be kept
+            parsed = parse(raw)
+            reply = parsed.answer if parsed.complete else ""
             combined, detail = score(prompt, reply, reference)
+            if not parsed.complete:
+                detail["notes"] = list(detail["notes"]) + ["no <ans> block"]
             if best is None or combined > best[0]:
                 best = (combined, reply, detail)
             else:

@@ -31,6 +31,10 @@ on:
         description: "pretraining wall-clock budget in minutes (0 = skip)"
         required: true
         default: "55"
+      seq_len:
+        description: "context length; pairs are filtered to fit it"
+        required: true
+        default: "128"
       pretrain_chars:
         description: "characters of Hindi text to use"
         required: true
@@ -95,6 +99,10 @@ jobs:
       - name: Fetch Hindi text for pretraining
         run: python src/fetch_text.py --out hindi_corpus.txt --chars ${{ inputs.pretrain_chars }} --min-chars 100000
 
+      - name: Build the reasoning corpus (every reply thinks first)
+        run: |
+          python src/build_reasoning.py             --train data/multi_train.jsonl             --heldout data/multi_heldout.jsonl             --out-train data/reason_train.jsonl             --out-heldout data/reason_heldout.jsonl
+
       - name: Pretrain on Hindi text
         if: ${{ inputs.pretrain_minutes != '0' }}
         run: |
@@ -102,7 +110,7 @@ jobs:
             --text-chars ${{ inputs.pretrain_chars }} \
             --dim ${{ inputs.dim }} --layers ${{ inputs.layers }} \
             --heads ${{ inputs.heads }} --ffn ${{ inputs.ffn }} \
-            --seq-len 128 --batch 8 --steps 1000000 --threads 2 \
+            --seq-len ${{ inputs.seq_len }} --batch 8 --steps 1000000 --threads 2 \
             --checkpoint-every 500 \
             --time-budget $(( ${{ inputs.pretrain_minutes }} * 60 )) \
             ${{ inputs.share_blocks == '1' && '--share-blocks' || '' }} \
@@ -113,19 +121,25 @@ jobs:
           python src/train.py --stage chat \
             --dim ${{ inputs.dim }} --layers ${{ inputs.layers }} \
             --heads ${{ inputs.heads }} --ffn ${{ inputs.ffn }} \
-            --seq-len 128 --batch 8 --lr 3e-4 --threads 2 \
+            --seq-len ${{ inputs.seq_len }} --batch 8 --lr 3e-4 --threads 2 \
             --checkpoint-every 200 \
-            --chat data/multi_train.jsonl \
+            --chat data/reason_train.jsonl \
             --target-steps ${{ inputs.target_steps }} \
             --clock-budget-minutes ${{ inputs.clock_budget_minutes }} \
             ${{ inputs.share_blocks == '1' && '--share-blocks' || '' }} \
             ${{ inputs.brain_mechanisms == '1' && '--multi-level --sparsity 0.01 --criticality --hippocampus --reward-weighting' || '--reward-weighting' }}
 
       - name: Held-out evaluation and safety screen
-        run: python src/eval_chat.py --heldout data/multi_heldout.jsonl --limit 200 --generate 30 || true
+        run: python src/eval_chat.py --heldout data/reason_heldout.jsonl --limit 200 --generate 30 || true
 
       - name: Evaluate on an unseen source (hh-rlhf, never trained on)
         run: python src/eval_unseen.py --parquet data/unseen_hh.jsonl --limit 200 || true
+
+      - name: Strict judge -- can it answer correctly, and does it think first
+        run: |
+          python src/eval_path.py --checkpoint runs/chat.pt \
+            --prompts data/reason_heldout.jsonl \
+            --out runs/path_eval.json --limit 150 --max-new 220 || true
 
       - name: Quantize to int8 and int4
         run: python src/quantize.py --limit 100 || true
