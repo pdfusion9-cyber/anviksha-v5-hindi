@@ -31,6 +31,14 @@ on:
         description: "pretraining wall-clock budget in minutes (0 = skip)"
         required: true
         default: "55"
+      distinct_blocks:
+        description: "1 = one block per layer (best loss, about 9% slower)"
+        required: true
+        default: "1"
+      drift:
+        description: "shared waves giving each layer a free gain; 0 disables"
+        required: true
+        default: "8"
       seq_len:
         description: "context length; pairs are filtered to fit it"
         required: true
@@ -101,7 +109,11 @@ jobs:
 
       - name: Build the reasoning corpus (every reply thinks first)
         run: |
-          python src/build_reasoning.py             --train data/multi_train.jsonl             --heldout data/multi_heldout.jsonl             --out-train data/reason_train.jsonl             --out-heldout data/reason_heldout.jsonl
+          python src/build_reasoning.py --compact \
+            --train data/multi_train.jsonl \
+            --heldout data/multi_heldout.jsonl \
+            --out-train data/reason_train.jsonl \
+            --out-heldout data/reason_heldout.jsonl
 
       - name: Pretrain on Hindi text
         if: ${{ inputs.pretrain_minutes != '0' }}
@@ -113,7 +125,8 @@ jobs:
             --seq-len ${{ inputs.seq_len }} --batch 8 --steps 1000000 --threads 2 \
             --checkpoint-every 500 \
             --time-budget $(( ${{ inputs.pretrain_minutes }} * 60 )) \
-            ${{ inputs.share_blocks == '1' && '--share-blocks' || '' }} \
+            ${{ inputs.distinct_blocks == '1' && '--distinct-blocks' || (inputs.share_blocks == '1' && '--share-blocks' || '') }} \
+            --drift ${{ inputs.drift }} \
             ${{ inputs.brain_mechanisms == '1' && '--multi-level --sparsity 0.01 --criticality' || '' }}
 
       - name: Chat fine-tune, clock-bound
@@ -126,7 +139,8 @@ jobs:
             --chat data/reason_train.jsonl \
             --target-steps ${{ inputs.target_steps }} \
             --clock-budget-minutes ${{ inputs.clock_budget_minutes }} \
-            ${{ inputs.share_blocks == '1' && '--share-blocks' || '' }} \
+            ${{ inputs.distinct_blocks == '1' && '--distinct-blocks' || (inputs.share_blocks == '1' && '--share-blocks' || '') }} \
+            --drift ${{ inputs.drift }} \
             ${{ inputs.brain_mechanisms == '1' && '--multi-level --sparsity 0.01 --criticality --hippocampus --reward-weighting' || '--reward-weighting' }}
 
       - name: Held-out evaluation and safety screen
@@ -139,7 +153,7 @@ jobs:
         run: |
           python src/eval_path.py --checkpoint runs/chat.pt \
             --prompts data/reason_heldout.jsonl \
-            --out runs/path_eval.json --limit 150 --max-new 220 || true
+            --out runs/path_eval.json --limit 150 --max-new 320 || true
 
       - name: Quantize to int8 and int4
         run: python src/quantize.py --limit 100 || true

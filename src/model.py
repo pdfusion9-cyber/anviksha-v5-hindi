@@ -97,11 +97,66 @@ class HindiLM(nn.Module):
                  ffn: int = 768, seq_len: int = 192, dropout: float = 0.1,
                  share_blocks: bool = False, multi_level: bool = False,
                  criticality: bool = False, cross_links: bool = False,
-                 recurrent: int = 1):
+                 recurrent: int = 1, elements: int = 0,
+                 adapters: int = 0, drift: int = 0, distinct: bool = False):
         super().__init__()
         self.embed = nn.Embedding(vocab, dim)
         self.position = nn.Embedding(seq_len, dim)
-        if share_blocks:
+        # Compositional elements. Instead of one block per layer, keep a small
+        # set of K shared blocks (the elements) and give each layer its own
+        # mixing weights over them. Layer l computes sum_k a[l,k] * element_k(x).
+        # The stored parameters are K blocks plus layers*K numbers, but the
+        # number of distinct effective layers is combinatorial -- each layer is
+        # its own combination, so new behaviour is produced from reused parts
+        # rather than from new parameters.
+        # A shared fast path with a small distinct correction per layer.
+        # The shared block carries the work -- one block-pass per layer, which is
+        # what makes it fast -- and each layer adds a low-rank correction of its
+        # own, so the layers are still not identical. This is the trade the
+        # element mixing got wrong: it spent compute to save parameters, when
+        # what we are short of is compute.
+        self.adapters = int(adapters)
+        if self.adapters > 0:
+            self.down = nn.Parameter(torch.randn(layers, dim, self.adapters) * 0.02)
+            self.up = nn.Parameter(torch.zeros(layers, self.adapters, dim))
+            self.adapter_scale = nn.Parameter(torch.ones(layers) * 0.1)
+        else:
+            self.down = self.up = self.adapter_scale = None
+
+        # Index-less drift. There is no per-layer weight tensor at all: one shared
+        # block, and each layer scales its own input by a factor generated from a
+        # few shared waves. The factor is a continuous function of depth,
+        #    g(l) = 1 + sum_j a_j * sin(w_j * l + p_j),
+        # so every layer is on the same curve and reads the same waves -- which is
+        # the "instant communication": there is nothing per-layer to exchange,
+        # the waves are shared by construction. Scaling the input before a shared
+        # matmul costs O(B*T*dim) instead of a second matmul, so this is as fast
+        # as one shared block while the layers are no longer identical.
+        self.drift = int(drift)
+        if self.drift > 0:
+            self.drift_amp = nn.Parameter(torch.randn(self.drift) * 0.05)
+            self.drift_freq = nn.Parameter(torch.linspace(0.5, 2.5, self.drift))
+            self.drift_phase = nn.Parameter(torch.rand(self.drift) * 6.283)
+        else:
+            self.drift_amp = self.drift_freq = self.drift_phase = None
+
+        self.elements = int(elements)
+        if self.elements > 0:
+            self.blocks = nn.ModuleList(
+                [Block(dim, heads, ffn, dropout) for _ in range(self.elements)]
+            )
+            self.mix = nn.Parameter(torch.zeros(layers, self.elements))
+            # start near-uniform so no element dominates before training
+            with torch.no_grad():
+                self.mix.fill_(1.0 / self.elements)
+        elif distinct:
+            # a separate block per layer, and drift may still add a free gain
+            self.blocks = nn.ModuleList(
+                [Block(dim, heads, ffn, dropout) for _ in range(layers)]
+            )
+        elif share_blocks or self.adapters > 0 or self.drift > 0:
+            # adapters ride on one shared block: the block does the work, the
+            # per-layer correction supplies the difference
             shared = Block(dim, heads, ffn, dropout)
             self.blocks = nn.ModuleList([shared for _ in range(layers)])
         else:
@@ -146,13 +201,44 @@ class HindiLM(nn.Module):
         for step in range(self.recurrent):
             if self.step_embed is not None:
                 x = x + self.step_embed.weight[step][None, None, :]
-            for index, block in enumerate(self.blocks):
-                if self.cross_links:
-                    x = block(x + memory, mask)
-                    seen += 1
-                    memory = memory + (x - memory) / seen
+            layer_count = self.mix.shape[0] if self.elements > 0 else len(self.blocks)
+            for index in range(layer_count):
+                if self.drift > 0 or self.adapters > 0:
+                    # both may be on at once: the drift gain is nearly free, the
+                    # adapter carries the stronger per-layer difference
+                    gain = 1.0
+                    if self.drift > 0:
+                        depth = torch.tensor(float(index), dtype=x.dtype, device=x.device)
+                        wave = torch.sin(self.drift_freq * depth + self.drift_phase)
+                        gain = 1.0 + (self.drift_amp * wave).sum()
+                    scaled = x * gain
+                    # distinct blocks keep their own weights; drift still gives
+                    # each of them its own gain, which costs nothing
+                    block = self.blocks[0] if len(self.blocks) == 1 else self.blocks[index]
+                    out = block(scaled, mask)
+                    if self.adapters > 0:
+                        corr = (scaled @ self.down[index]) @ self.up[index]
+                        x = out + self.adapter_scale[index] * corr
+                    else:
+                        x = out
+                elif self.elements > 0:
+                    # every layer is its own weighted combination of the shared
+                    # elements; the weights are learned per layer, so six layers
+                    # over three elements give six different effective blocks
+                    weights = torch.softmax(self.mix[index], dim=0)
+                    mixed = None
+                    for k, element in enumerate(self.blocks):
+                        term = weights[k] * element(x, mask)
+                        mixed = term if mixed is None else mixed + term
+                    x = mixed
                 else:
-                    x = block(x, mask)
+                    block = self.blocks[index]
+                    if self.cross_links:
+                        x = block(x + memory, mask)
+                        seen += 1
+                        memory = memory + (x - memory) / seen
+                    else:
+                        x = block(x, mask)
                 if self.controller is not None:
                     self.controller.measure(x, index)
                     x = x * self.controller.gain[index]

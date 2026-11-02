@@ -72,6 +72,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--recurrent", default=1, type=int,
                    help="apply the block stack N times with a step embedding; buys "
                         "effective depth for recurrent x dim parameters")
+    p.add_argument("--distinct-blocks", action="store_true",
+                   help="one block per layer; combines with --drift")
+    p.add_argument("--drift", default=0, type=int,
+                   help="shared waves giving every layer its own gain")
     p.add_argument("--init-from", default=None, type=Path,
                    help="checkpoint to start from. Without this the chat stage looks "
                         "for <out>/pretrain.pt and silently starts from random weights "
@@ -87,7 +91,9 @@ def build_model(tokenizer: CharTokenizer, args) -> HindiLM:
                    args.seq_len, share_blocks=args.share_blocks,
                    multi_level=args.multi_level, criticality=args.criticality,
                    cross_links=getattr(args, "cross_links", False),
-                   recurrent=getattr(args, "recurrent", 1))
+                   recurrent=getattr(args, "recurrent", 1),
+                   drift=getattr(args, "drift", 0),
+                   distinct=getattr(args, "distinct_blocks", False))
 
 
 def load_model(path: Path, tokenizer: CharTokenizer, args,
