@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from reasoning import build_trace  # noqa: E402
+from reasoning import build_trace_compact, build_trace  # noqa: E402
 
 TRACE_PREFIX = "<think>"
 TRACE_SUFFIX = "</think>"
@@ -36,6 +36,8 @@ def main() -> None:
     parser.add_argument("--heldout", default="data/multi_heldout.jsonl", type=Path)
     parser.add_argument("--out-train", default="data/reason_train.jsonl", type=Path)
     parser.add_argument("--out-heldout", default="data/reason_heldout.jsonl", type=Path)
+    parser.add_argument("--compact", action="store_true",
+                        help="short trace, so a reasoning example fits a 192-token context")
     parser.add_argument("--keep-answer", action="store_true", default=True,
                         help="also write the bare answer under 'answer' for scoring")
     args = parser.parse_args()
@@ -50,7 +52,8 @@ def main() -> None:
             answer = row["assistant"].strip()
             if not prompt or not answer:
                 continue
-            trace = build_trace(prompt, answer)
+            trace = (build_trace_compact(prompt, answer) if args.compact
+                     else build_trace(prompt, answer))
             rows.append({
                 "user": prompt,
                 "assistant": f"{TRACE_PREFIX}{trace}{TRACE_SUFFIX}"

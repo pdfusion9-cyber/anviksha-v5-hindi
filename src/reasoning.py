@@ -51,6 +51,44 @@ def _question_kind(prompt: str) -> str:
     return "यह एक सामान्य सवाल है। सीधा उत्तर देना है।"
 
 
+COMPACT_KINDS = {
+    "fact": "तथ्यात्मक",
+    "how": "क्रम में चरण",
+    "why": "कारण",
+    "translate": "अनुवाद",
+    "classify": "वर्गीकरण",
+    "general": "सामान्य",
+}
+
+
+def _kind_key(prompt: str) -> str:
+    low = prompt.lower()
+    if any(n in low for n in ("क्या है", "कौन है", "कितने", "कितनी", "what is", "who is")):
+        return "fact"
+    if any(n in low for n in ("कैसे", "how to", "तरीका")):
+        return "how"
+    if any(n in low for n in ("क्यों", "why")):
+        return "why"
+    if any(n in low for n in ("translate", "अनुवाद", "hinglish")):
+        return "translate"
+    if any(n in low for n in ("पहचानें", "identify", "कौन सा")):
+        return "classify"
+    return "general"
+
+
+def build_trace_compact(prompt: str, reference: str | None = None) -> str:
+    """A short trace: the question type, and the target when one is known.
+
+    Kept to roughly 45 characters so a full reasoning example still fits a
+    192-token context. The long trace did not fit one, and a trace that gets
+    truncated is worse than a short one -- the model would learn a cut-off plan.
+    """
+    kind = COMPACT_KINDS[_kind_key(prompt)]
+    if reference:
+        return f"{kind}। उत्तर: {reference.strip()[:40]}।"
+    return f"{kind}। सीधा उत्तर।"
+
+
 def build_trace(prompt: str, reference: str | None = None) -> str:
     """A short, structured plan derived from the question.
 
@@ -67,9 +105,10 @@ def build_trace(prompt: str, reference: str | None = None) -> str:
     return " ".join(parts)
 
 
-def wrap(prompt: str, answer: str, reference: str | None = None) -> str:
+def wrap(prompt: str, answer: str, reference: str | None = None,
+         compact: bool = False) -> str:
     """The exact string the model is trained to produce for this prompt."""
-    trace = build_trace(prompt, reference)
+    trace = build_trace_compact(prompt, reference) if compact else build_trace(prompt, reference)
     return f"{THINK_OPEN}{trace}{THINK_CLOSE}{ANS_OPEN}{answer.strip()}{ANS_CLOSE}"
 
 
