@@ -1,0 +1,65 @@
+name: e2e-test
+
+# How many questions come back correct, and does anything wrong ever escape?
+#
+# Two separate questions, because they mean different things:
+#
+#   known   a question the knowledge base contains. The stored answer is the
+#           right answer, so the pipeline should return it. This is the
+#           "correct by construction" claim and it is measurable.
+#
+#   unseen  a question the base does not contain. The pipeline should refuse
+#           rather than return a lookalike. Any wrong answer here is a failure.
+#
+# The run fails if a single wrong answer is returned, because a wrong answer
+# arriving with the confidence of a stored fact is worse than a refusal.
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        required: true
+        default: "500"
+      threshold:
+        required: true
+        default: "0.62"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pyarrow requests
+
+      - name: Build the full corpus
+        run: |
+          python src/fetch_multi.py --max-prompt 140 --max-reply 260 --cap 40000 --heldout 1000
+          python src/fetch_extra.py --max-prompt 140 --max-reply 260 --cap 40000
+          python src/merge_corpus.py --heldout 1000
+          cat data/corpus_stats.json
+          wc -l data/multi_train.jsonl data/multi_heldout.jsonl
+
+      - name: End-to-end
+        run: |
+          python src/e2e_test.py \
+            --kb data/multi_train.jsonl \
+            --test data/multi_heldout.jsonl \
+            --limit ${{ inputs.limit }} \
+            --threshold ${{ inputs.threshold }} \
+            --out runs/e2e.json
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: |
+            runs/e2e.json
+            data/corpus_stats.json

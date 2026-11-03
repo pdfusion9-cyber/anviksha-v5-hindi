@@ -47,14 +47,78 @@ def ngrams(text: str, n: int = 3) -> set[str]:
     return {text[i:i + n] for i in range(max(0, len(text) - n + 1))}
 
 
-def similarity(a: str, b: str) -> float:
+def similarity(a: str, b: str, idf: dict[str, float] | None = None) -> float:
+    """Similarity that ignores the instruction template.
+
+    Instruction corpora repeat the same wording across thousands of rows --
+    "Translate the following from English into Hinglish." appears with every
+    payload. Plain token overlap then scores two different questions as nearly
+    identical, and retrieval confidently returns the wrong stored answer. So
+    tokens are weighted by how rare they are: the template words that appear
+    everywhere count for almost nothing, and the payload that differs counts.
+    """
     ta, tb = tokens(a), tokens(b)
     if not ta or not tb:
         return 0.0
-    jaccard = len(ta & tb) / len(ta | tb)
+
+    def weight(tok: str) -> float:
+        return (idf or {}).get(tok, 1.0)
+
+    shared = ta & tb
+    union = ta | tb
+    w_shared = sum(weight(t) for t in shared)
+    w_union = sum(weight(t) for t in union)
+    weighted_jaccard = w_shared / w_union if w_union else 0.0
+
     ga, gb = ngrams(a), ngrams(b)
     dice = 2 * len(ga & gb) / max(len(ga) + len(gb), 1)
-    return 0.6 * jaccard + 0.4 * dice
+    return 0.65 * weighted_jaccard + 0.35 * dice
+
+
+NUMBER = re.compile(r"\d+")
+
+
+def consistent_with_question(question: str, answer: str,
+                             idf: dict[str, float] | None = None) -> tuple[bool, str]:
+    """Would this stored answer actually be answering *this* question?
+
+    Similarity alone cannot tell "cancel alarm for 3" from "set alarm for 5":
+    the wording matches and the payload does not. Two deterministic checks catch
+    that class of error, and both are facts about the text:
+
+      * every number in the question appears in the answer
+      * the answer mentions at least half of the question's distinctive words
+
+    A stored answer that fails either is not an answer to this question, however
+    similar the question looked.
+    """
+    q_numbers = set(NUMBER.findall(question))
+    a_numbers = set(NUMBER.findall(answer))
+    missing = q_numbers - a_numbers
+    if missing:
+        return False, f"question asks about {sorted(missing)}, answer never mentions it"
+
+    q_tokens = tokens(question)
+    if not q_tokens:
+        return True, ""
+    # only the distinctive words matter; template words are shared by everything
+    distinctive = {t for t in q_tokens if (idf or {}).get(t, 1.0) >= 1.5} or q_tokens
+    present = {t for t in distinctive if t in tokens(answer)}
+    if len(present) / len(distinctive) < 0.5:
+        return False, (f"answer covers {len(present)}/{len(distinctive)} of the "
+                       f"question's distinctive words")
+    return True, ""
+
+
+def build_idf(questions: list[str]) -> dict[str, float]:
+    """Inverse document frequency over the knowledge base questions."""
+    import math
+    df: dict[str, int] = {}
+    for q in questions:
+        for tok in tokens(q):
+            df[tok] = df.get(tok, 0) + 1
+    n = max(len(questions), 1)
+    return {tok: math.log((n + 1) / (count + 1)) + 1.0 for tok, count in df.items()}
 
 
 @dataclass
@@ -68,6 +132,7 @@ class Hit:
 @dataclass
 class KnowledgeBase:
     rows: list[dict] = field(default_factory=list)
+    idf: dict[str, float] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path) -> "KnowledgeBase":
@@ -75,10 +140,10 @@ class KnowledgeBase:
         for line in Path(path).read_text(encoding="utf-8").splitlines():
             if line.strip():
                 rows.append(json.loads(line))
-        return cls(rows)
+        return cls(rows, build_idf([r["user"] for r in rows]))
 
     def search(self, question: str, k: int = 3) -> list[Hit]:
-        scored = [(similarity(question, r["user"]), r) for r in self.rows]
+        scored = [(similarity(question, r["user"], self.idf), r) for r in self.rows]
         scored.sort(key=lambda x: -x[0])
         return [Hit(r["user"], r["assistant"], round(s, 3), r.get("source", ""))
                 for s, r in scored[:k]]
@@ -100,7 +165,8 @@ class Answer:
 
 
 def answer(question: str, kb: KnowledgeBase | None, generate=None,
-           match_threshold: float = 0.62, judge=None) -> Answer:
+           match_threshold: float = 0.62, exact_threshold: float = 0.95,
+           judge=None) -> Answer:
     """Retrieve, then rules, then the model. Never return something unchecked."""
     hits = kb.search(question, k=3) if kb else []
 
@@ -109,10 +175,21 @@ def answer(question: str, kb: KnowledgeBase | None, generate=None,
     if hits and hits[0].score >= match_threshold:
         best = hits[0]
         report = check_rules(best.answer)
-        if report.passed:
+        if not report.passed:
+            return Answer(None, "refused", best.score, hits,
+                          [v.detail for v in report.errors])
+        # A near-identical question is the same question, so its stored answer is
+        # the answer: "2022 मास्टर्स गोल्फ किसने जीता?" -> "स्कॉटी शेफलर" is
+        # correct even though the answer never repeats "2022". Below that, the
+        # match is a lookalike and the answer has to prove it addresses the
+        # question before it is returned as a checked fact.
+        if best.score >= exact_threshold:
             return Answer(best.answer, "knowledge_base", best.score, hits)
-        return Answer(None, "refused", best.score, hits,
-                      [v.detail for v in report.errors])
+        ok, why = consistent_with_question(question, best.answer,
+                                           kb.idf if kb else None)
+        if not ok:
+            return Answer(None, "refused", best.score, hits, [why])
+        return Answer(best.answer, "knowledge_base", best.score, hits)
 
     # 2. nothing good enough stored: let the model write, then check it
     if generate is None:
