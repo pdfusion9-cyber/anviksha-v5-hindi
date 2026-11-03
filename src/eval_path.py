@@ -99,7 +99,10 @@ def main() -> None:
         "no_answer_block": incomplete,
         "answered": len(rows) - incomplete,
         "passed": sum(verdicts) if verdicts else 0,
-        "failed": (len(verdicts) - sum(verdicts)) if verdicts else 0,
+        # only replies that actually produced an answer can fail; counting the
+        # no-answer ones as failures hid the difference in run 23 (failed said
+        # 150 when 93 of those never answered at all)
+        "failed": (len(rows) - incomplete - sum(verdicts)) if verdicts else 0,
         "path_mean": mean(paths),
         "form_mean": mean(forms),
         "answer_mean": mean(answers),
