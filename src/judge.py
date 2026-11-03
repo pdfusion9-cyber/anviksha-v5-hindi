@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from grammar_reward import score_hindi
 from meaning_reward import score_against_reference
 from path_reward import score_path
+from rule_engine import check as check_rules  # noqa: E402
 
 DEVANAGARI = re.compile(r"[\u0900-\u097F]")
 WORD = re.compile(r"[\w\u0900-\u097F]+")
@@ -154,7 +155,16 @@ def judge(prompt: str, reply: str, reference: str | None,
     else:
         gates["no_invented_names"] = True
 
-    # 5. shares the reference's content words
+    # 5. obeys the rule files. This is the gate that tells the model which answer
+    # is right and which is wrong: a grammar violation is a fact about the text,
+    # not an opinion, so it vetoes rather than deducts.
+    rule_report = check_rules(reply)
+    gates["rules"] = rule_report.passed
+    if not gates["rules"]:
+        reasons.append("rules: " + "; ".join(
+            v.detail for v in rule_report.errors[:2]))
+
+    # 6. shares the reference's content words
     if reference:
         ref_content = _content(reference)
         if ref_content:

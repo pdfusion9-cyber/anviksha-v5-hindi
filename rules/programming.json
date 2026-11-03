@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "language": "code",
+  "note": "Programming rules, checked on any code the model emits. The point is not style preferences -- each rule below catches something that makes the code wrong or unrunnable, and each is checkable without executing it.",
+  "rules": [
+    {
+      "id": "code.balanced_brackets",
+      "severity": "error",
+      "rejects": "unbalanced (), [], {} which cannot compile in any language",
+      "pairs": [["(", ")"], ["[", "]"], ["{", "}"]],
+      "ignore_in_strings": true
+    },
+    {
+      "id": "code.no_mixed_indentation",
+      "severity": "error",
+      "rejects": "tabs and spaces mixed on different lines, which Python rejects",
+      "languages": ["python"]
+    },
+    {
+      "id": "code.python_keywords",
+      "severity": "error",
+      "rejects": "a keyword from another language used in Python",
+      "languages": ["python"],
+      "forbidden": ["function", "end if", "end for", "endif", "console.log",
+                    "println", "public static void", "var ", "defn "]
+    },
+    {
+      "id": "code.python_no_semicolon",
+      "severity": "warning",
+      "rejects": "a line ending in a semicolon, which is a statement separator from another language",
+      "languages": ["python"],
+      "pattern": ";\\s*$"
+    },
+    {
+      "id": "code.colon_after_block",
+      "severity": "error",
+      "rejects": "a Python block opener without its colon",
+      "languages": ["python"],
+      "pattern": "^\\s*(if|elif|else|for|while|def|class|try|except|finally|with)\\b[^:{\\n]*$"
+    },
+    {
+      "id": "code.no_undefined_placeholder",
+      "severity": "error",
+      "rejects": "a placeholder left in the code instead of an implementation",
+      "markers": ["TODO", "FIXME", "...", "pass  # implement", "your_code_here",
+                  "<insert", "PLACEHOLDER"]
+    },
+    {
+      "id": "code.has_entry_point",
+      "severity": "warning",
+      "rejects": "a script with no callable entry point, so the reader cannot run it",
+      "languages": ["python"],
+      "any_of": ["def ", "class ", "if __name__"]
+    },
+    {
+      "id": "code.no_destructive_default",
+      "severity": "error",
+      "rejects": "a shell command that deletes or overwrites without a guard",
+      "pattern": "\\b(rm\\s+-rf\\s+/|rm\\s+-rf\\s+\\*|mkfs\\.|dd\\s+if=.*of=/dev/|chmod\\s+-R\\s+777|:>\\s*/etc/)"
+    }
+  ]
+}

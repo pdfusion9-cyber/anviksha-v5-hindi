@@ -1,0 +1,177 @@
+{
+  "version": 1,
+  "language": "hi",
+  "note": "Machine-checkable Hindi rules. Each rule states what it rejects, so a violation is a fact about the text rather than an opinion. Fed from outside once; the engine enforces it on every answer afterwards.",
+  "rules": [
+    {
+      "id": "hi.ends_with_predicate",
+      "severity": "warning",
+      "rejects": "a sentence that does not end on a verb, copula or question mark",
+      "endings": [
+        "है",
+        "हैं",
+        "था",
+        "थी",
+        "थे",
+        "हो",
+        "होगा",
+        "होगी",
+        "होंगे",
+        "करें",
+        "करता",
+        "करती",
+        "करते",
+        "दें",
+        "देता",
+        "देती",
+        "देते",
+        "कहा",
+        "कहें",
+        "जाता",
+        "जाती",
+        "जाते",
+        "सकता",
+        "सकती",
+        "सकते",
+        "चाहिए",
+        "रहा",
+        "रही",
+        "रहे",
+        "गया",
+        "गई",
+        "गए",
+        "लिया",
+        "लिए",
+        "बनाएँ",
+        "बनाएं",
+        "उपयोग",
+        "आवश्यक",
+        "जरूरी",
+        "ज़रूरी",
+        "महत्वपूर्ण"
+      ],
+      "allow_terminal": [
+        "।",
+        "?",
+        "!",
+        "."
+      ],
+      "note": "downgraded from error after 2,685 of 5,554 gold answers failed it; endings are open-ended in Hindi"
+    },
+    {
+      "id": "hi.no_english_order",
+      "severity": "error",
+      "rejects": "an English word order copied into Hindi, where the copula sits before its complement",
+      "pattern": "(^|[\\s।])(है|हैं|था|थी)\\s+(एक|यह|वह|ये|वो|बहुत|अच्छा|अच्छी|अच्छे|महत्वपूर्ण|ज़रूरी|जरूरी)\\b"
+    },
+    {
+      "id": "hi.postposition_follows_noun",
+      "severity": "error",
+      "rejects": "a postposition that opens a clause instead of following the noun it governs",
+      "pattern": "(^|[।?!]\\s*)(का|की|के|को|में|से|पर|तक|ने)\\s"
+    },
+    {
+      "id": "hi.plural_agreement",
+      "severity": "error",
+      "rejects": "a plural subject with a singular copula",
+      "subjects": [
+        "वे",
+        "ये",
+        "वो",
+        "लोग",
+        "बच्चे",
+        "छात्र",
+        "सभी"
+      ],
+      "bad_copulas": [
+        "है",
+        "था",
+        "थी",
+        "होगा",
+        "करता",
+        "करती",
+        "देता",
+        "देती"
+      ],
+      "max_gap": 12,
+      "note": "hard error at gap 12; measured 1.37% false positives on gold"
+    },
+    {
+      "id": "hi.honorific_agreement",
+      "severity": "error",
+      "rejects": "आप with a singular verb form",
+      "subjects": [
+        "आप"
+      ],
+      "bad_copulas": [
+        "है",
+        "था",
+        "थी",
+        "करता",
+        "करती",
+        "देता",
+        "देती",
+        "सकता",
+        "सकती"
+      ],
+      "max_gap": 12,
+      "note": "hard error at gap 12; measured 1.37% false positives on gold"
+    },
+    {
+      "id": "hi.no_double_postposition",
+      "severity": "warning",
+      "rejects": "two postpositions stacked without a noun between them",
+      "pattern": "(का|की|के|को|में|से)\\s+(का|की|के|को|में|से)\\b",
+      "allow": [
+        "के रूप",
+        "के बारे",
+        "के दौरान",
+        "के लिए",
+        "के साथ",
+        "के अलावा",
+        "के अनुसार",
+        "के माध्यम",
+        "के जरिए",
+        "के ज़रिए",
+        "के कारण",
+        "के बाद",
+        "के पहले",
+        "के अंदर",
+        "के ऊपर",
+        "के नीचे"
+      ]
+    },
+    {
+      "id": "hi.has_matra",
+      "severity": "error",
+      "rejects": "Devanagari written as bare consonants with no vowel signs, which is unreadable",
+      "min_matra_ratio": 0.06,
+      "matra_range": [
+        "ा",
+        "्"
+      ]
+    },
+    {
+      "id": "hi.no_repeated_word",
+      "severity": "error",
+      "rejects": "the same word three times in a row",
+      "max_repeat": 2
+    },
+    {
+      "id": "hi.terminal_stop",
+      "severity": "warning",
+      "rejects": "a sentence with no terminal punctuation",
+      "allow_terminal": [
+        "।",
+        "?",
+        "!"
+      ]
+    },
+    {
+      "id": "hi.no_latin_sentence",
+      "severity": "warning",
+      "rejects": "a Hindi answer that is mostly Latin characters, which means it did not answer in Hindi",
+      "max_latin_ratio": 0.5
+    }
+  ]
+}
