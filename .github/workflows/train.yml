@@ -107,6 +107,12 @@ jobs:
       - name: Fetch Hindi text for pretraining
         run: python src/fetch_text.py --out hindi_corpus.txt --chars ${{ inputs.pretrain_chars }} --min-chars 100000
 
+      - name: Add the large Hindi sources (toward 100k pairs)
+        run: |
+          python src/fetch_extra.py --max-prompt 140 --max-reply 260 --cap 40000
+          python src/merge_corpus.py --heldout 1000
+          cat data/corpus_stats.json
+
       - name: Build the reasoning corpus (every reply thinks first)
         run: |
           python src/build_reasoning.py --compact \
