@@ -31,7 +31,8 @@ from grammar_reward import score_hindi  # noqa: E402
 from meaning_reward import score_against_reference  # noqa: E402
 from judge import judge  # noqa: E402
 from reasoning import parse  # noqa: E402
-from lessons import LessonStore, best_fragment  # noqa: E402
+from lessons import LessonStore, best_fragment
+from rule_engine import check as check_rules  # noqa: E402
 from tokenizer import CharTokenizer  # noqa: E402
 
 
@@ -68,6 +69,9 @@ def score(prompt: str, reply: str, reference: str | None) -> tuple[float, dict]:
     """Gate first, score second. A reply that fails any gate scores at most 30,
     so a wrong answer cannot average its way past the threshold on good form."""
     verdict = judge(prompt, reply, reference)
+    if verdict.passed and not check_rules(text).passed:
+        verdict.passed = False
+        verdict.reasons.append('rules: grammar violation')
     return verdict.score, {
         "path": verdict.path,
         "form": verdict.form,
