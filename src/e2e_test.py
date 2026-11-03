@@ -40,6 +40,8 @@ def main() -> None:
                         help="similarity needed before a stored answer is trusted")
     parser.add_argument("--out", default="runs/e2e.json", type=Path)
     parser.add_argument("--samples", default=12, type=int)
+    parser.add_argument("--sweep", default="",
+                        help="comma separated thresholds to compare, e.g. 0.62,0.75,0.85")
     args = parser.parse_args()
 
     kb = KnowledgeBase.load(args.kb)
@@ -110,6 +112,49 @@ def main() -> None:
             else:
                 print(f"   refused: {'; '.join(result.violations[:1])[:70]}")
             print()
+
+    if args.sweep:
+        # The threshold decides the trade: too low and a lookalike question gets
+        # someone else's answer, too high and real questions go unanswered. Which
+        # point is right is a measurement, not an opinion, so measure all of them
+        # on the same sample and report coverage against wrong answers.
+        thresholds = [float(t) for t in args.sweep.split(",") if t.strip()]
+        frontier = []
+        print("\n" + "=" * 62)
+        print("threshold sweep")
+        print(f"{'thresh':>7} {'known ok':>9} {'known %':>8} "
+              f"{'unseen ok':>10} {'unseen WRONG':>13}")
+        for th in thresholds:
+            kc = sum(1 for row in known
+                     if answer(row["user"], kb, generate=None,
+                               match_threshold=th).text == row["assistant"])
+            uw = 0
+            uc = 0
+            for row in test:
+                res = answer(row["user"], kb, generate=None, match_threshold=th)
+                if res.via == "knowledge_base":
+                    ok = score_against_reference(res.text, row.get("assistant", "")).total >= 60
+                    if ok:
+                        uc += 1
+                    else:
+                        uw += 1
+            frontier.append({"threshold": th,
+                             "known_correct": kc,
+                             "known_rate": round(kc / max(len(known), 1), 3),
+                             "unseen_correct": uc,
+                             "unseen_wrong": uw})
+            print(f"{th:>7.2f} {kc:>9} {kc / max(len(known), 1):>7.1%} "
+                  f"{uc:>10} {uw:>13}")
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        (args.out.parent / "e2e_sweep.json").write_text(
+            json.dumps(frontier, indent=2), encoding="utf-8")
+        safe = [f for f in frontier if f["unseen_wrong"] == 0]
+        best = max(safe, key=lambda f: f["known_rate"]) if safe else None
+        print("\nsafest threshold with zero wrong answers:",
+              best["threshold"] if best else "none of those tried")
+        if best:
+            print(f"  at {best['threshold']}: {best['known_rate']:.1%} of known "
+                  f"questions answered correctly, {best['unseen_wrong']} wrong")
 
     total = sum(counts.values())
     answered = counts["kb_correct"] + counts["kb_wrong"] + \

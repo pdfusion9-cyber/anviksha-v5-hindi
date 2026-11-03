@@ -53,6 +53,7 @@ jobs:
             --test data/multi_heldout.jsonl \
             --limit ${{ inputs.limit }} \
             --threshold ${{ inputs.threshold }} \
+            --sweep 0.62,0.70,0.78,0.85,0.92 \
             --out runs/e2e.json
 
       - name: Upload
