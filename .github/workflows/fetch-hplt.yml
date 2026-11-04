@@ -1,0 +1,58 @@
+name: fetch-hplt
+
+# Stage 1 of the corpus plan: take a bounded, cleaned slice of HPLT Hindi.
+#
+# Bin 9 was chosen by measurement, not by the label: 200,000 documents,
+# 2.90B characters, 100% Devanagari-dominant, zero mojibake, 1.48% near
+# duplicates. Bin 10 calls itself the highest quality but holds only 3,176
+# documents and 4.22% duplicates.
+#
+# Runs on a runner because data.hplt-project.org is blocked from the sandbox.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_bytes:
+        description: "decompressed bytes to stream"
+        required: true
+        default: "3000000000"
+      max_docs:
+        description: "documents to keep"
+        required: true
+        default: "400000"
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install zstandard
+
+      - name: Fetch and clean
+        run: |
+          python src/fetch_hplt.py \
+            --max-bytes ${{ inputs.max_bytes }} \
+            --max-docs ${{ inputs.max_docs }} \
+            --out-dir data/hplt
+
+      - name: Show what was produced
+        run: |
+          ls -la data/hplt/
+          wc -c data/hplt/hindi_corpus.txt
+          head -c 400 data/hplt/hindi_corpus.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hplt-hindi-clean
+          path: data/hplt/
+          if-no-files-found: warn
+          compression-level: 6
