@@ -55,6 +55,13 @@ jobs:
             --report runs/bpe_report.json
           cat runs/bpe_report.json
 
+      - name: "Modern retrieval: BM25 + rerank"
+        run: |
+          python src/bm25_retrieval.py data/multi_train.jsonl data/multi_heldout.jsonl ${{ inputs.limit }}
+
+      - name: "Method and result store: reuse, adaptation, staleness"
+        run: python src/method_store.py
+
       - name: "End-to-end (recognition memory: familiarity + recollection)"
         run: |
           python src/e2e_test.py \
