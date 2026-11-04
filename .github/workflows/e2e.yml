@@ -55,6 +55,14 @@ jobs:
             --report runs/bpe_report.json
           cat runs/bpe_report.json
 
+      - name: "What the model answers, by kind of question"
+        run: |
+          python src/show_answers.py \
+            --kb data/multi_train.jsonl \
+            --test data/multi_heldout.jsonl \
+            --limit ${{ inputs.limit }} \
+            --threshold 0.92
+
       - name: "Modern retrieval: BM25 + rerank"
         run: |
           python src/bm25_retrieval.py data/multi_train.jsonl data/multi_heldout.jsonl ${{ inputs.limit }}
@@ -89,6 +97,7 @@ jobs:
           path: |
             runs/e2e.json
             runs/e2e_brain.json
+            runs/answers_by_kind.json
             runs/e2e_sweep.json
             runs/bpe4096.json
             runs/bpe_report.json
