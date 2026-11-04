@@ -70,6 +70,8 @@ jobs:
 
       - name: "BPE + answer-only loss vs the old setup"
         run: |
+          python src/build_corpus.py --chars 3000000
+          wc -c hindi_corpus.txt
           for tok in char bpe; do
             echo "===== tokenizer: $tok ====="
             timeout 1100 python src/train.py --stage pretrain --tokenizer $tok \
@@ -97,7 +99,7 @@ jobs:
       - name: Locate the checkpoint
         id: ckpt
         run: |
-          found=$(find runs -name "chat.pt" | head -1)
+          found=$(ls runs/tok_bpe/chat.pt 2>/dev/null || find runs -name "chat.pt" | head -1)
           echo "path=$found" >> "$GITHUB_OUTPUT"
           echo "checkpoint: ${found:-none}"
           ls -la runs/ | head -20

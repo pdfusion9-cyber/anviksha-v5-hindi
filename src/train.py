@@ -264,9 +264,15 @@ def main() -> None:
             for line in Path(args.chat).read_text(encoding="utf-8").splitlines()
             if line.strip()
         )
-        tokenizer = CharTokenizer.train(corpus)
+        # honour the requested tokenizer here too: falling back to char silently
+        # is how a --tokenizer bpe run trained a character model and nobody noticed
+        if args.tokenizer == "bpe":
+            tokenizer = BPETokenizer.train(corpus, vocab_size=4096)
+            print(f"  built bpe tokenizer from chat data: vocab {tokenizer.size}")
+        else:
+            tokenizer = CharTokenizer.train(corpus)
+            print(f"  built tokenizer from chat data: vocab {tokenizer.size}")
         tokenizer.save(tokenizer_path)
-        print(f"  built tokenizer from chat data: vocab {tokenizer.size}")
 
     if args.init_from is not None:
         model = load_model(args.init_from, tokenizer, args, required=True)
