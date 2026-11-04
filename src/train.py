@@ -31,11 +31,15 @@ from clock import make_budget  # noqa: E402
 from grammar_reward import score_hindi  # noqa: E402
 from model import HindiLM  # noqa: E402
 from tokenizer import CharTokenizer  # noqa: E402
+from bpe_tokenizer import BPETokenizer, load_any  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--stage", choices=["pretrain", "chat"], required=True)
+    p.add_argument("--tokenizer", choices=["char", "bpe"], default="char",
+                   help="bpe gives roughly 6x more Hindi text per window at "
+                        "the same parameter count; char is the old default")
     p.add_argument("--text", default="hindi_corpus.txt", type=Path)
     p.add_argument("--chat", default="data/chat_train.jsonl", type=Path)
     p.add_argument("--out", default="runs", type=Path)
@@ -197,7 +201,12 @@ def main() -> None:
         if len(text) < 5000:
             raise SystemExit(f"corpus too small ({len(text)} chars); refusing to "
                              f"pretrain on a stub")
-        tokenizer = CharTokenizer.train(text)
+        if args.tokenizer == "bpe":
+            # 4096 total: 256 bytes + merges + the 13 specials
+            tokenizer = BPETokenizer.train(text, vocab_size=4096)
+            print(f"  bpe tokenizer: vocab {tokenizer.size}")
+        else:
+            tokenizer = CharTokenizer.train(text)
         ids = np.array(tokenizer.encode(text), dtype=np.int64)
         model = load_model(args.out / "pretrain.pt", tokenizer, args)
         report = model.parameters_report()
@@ -242,7 +251,7 @@ def main() -> None:
     # ---------- chat fine-tune ----------
     tokenizer_path = args.out / "tokenizer.json"
     if tokenizer_path.exists():
-        tokenizer = CharTokenizer.load(tokenizer_path)
+        tokenizer = load_any(tokenizer_path)
         print("  loaded tokenizer from pretrain")
     else:
         corpus = "\n".join(
