@@ -68,16 +68,21 @@ jobs:
             --report runs/bpe_report.json
           cat runs/bpe_report.json
 
-      - name: "BPE training: same parameters, 6x more Hindi text per window"
+      - name: "BPE + answer-only loss vs the old setup"
         run: |
-          python src/fetch_text.py --chars 3000000 --out hindi_corpus.txt || \
-            head -c 3000000 data/multi_train.jsonl > hindi_corpus.txt
           for tok in char bpe; do
-            echo "=== tokenizer: $tok ==="
-            timeout 900 python src/train.py --stage pretrain --tokenizer $tok \
+            echo "===== tokenizer: $tok ====="
+            timeout 1100 python src/train.py --stage pretrain --tokenizer $tok \
               --text hindi_corpus.txt --out runs/tok_$tok \
               --dim 192 --layers 4 --heads 4 --ffn 768 --seq-len 192 \
-              --steps 400 --batch 8 --threads 2 || echo "  $tok run did not finish"
+              --steps 500 --batch 8 --threads 2 --text-chars 3000000 \
+              || echo "  pretrain did not finish"
+            timeout 1100 python src/train.py --stage chat --tokenizer $tok \
+              --chat data/multi_train.jsonl --out runs/tok_$tok \
+              --init-from runs/tok_$tok/pretrain.pt \
+              --dim 192 --layers 4 --heads 4 --ffn 768 --seq-len 192 \
+              --steps 800 --batch 8 --threads 2 --target-steps 0 \
+              || echo "  chat did not finish"
           done
 
       - name: Download the trained checkpoint

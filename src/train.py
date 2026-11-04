@@ -131,7 +131,7 @@ def save(model: HindiLM, tokenizer: CharTokenizer, path: Path, args) -> None:
 
 
 def combined_loss(logits, aux_logits, hidden_scale, x_targets, tokenizer, args,
-                  weights=None):
+                  weights=None, token_mask=None):
     """Main next-token loss plus the two brain-inspired penalties.
 
     multi-level: each block's own prediction is scored, so the gradient reaches
@@ -143,6 +143,11 @@ def combined_loss(logits, aux_logits, hidden_scale, x_targets, tokenizer, args,
         logits.reshape(-1, tokenizer.size), x_targets.reshape(-1),
         ignore_index=tokenizer.pad, reduction="none")
     mask = (x_targets != tokenizer.pad).float().reshape(-1)
+    if token_mask is not None:
+        # supervise the answer only. The question is handed to the model at
+        # inference, so predicting it teaches a task it never has to do -- and
+        # the audit showed that was 50% of all tokens, i.e. half the gradient.
+        mask = mask * token_mask.float().reshape(-1)
     if weights is None:
         loss = (per_token * mask).sum() / mask.sum().clamp(min=1)
     else:
@@ -286,17 +291,28 @@ def main() -> None:
             return "<mix>" if markers else "<en>"
         return "<mix>"
 
-    def encode_pair(pair: dict) -> list[int]:
-        return (
+    def encode_pair(pair: dict) -> tuple[list[int], int]:
+        """Return the ids and the index where the answer starts.
+
+        Everything before that index is context: the model reads it and is never
+        scored on reproducing it.
+        """
+        head = (
             [tokenizer.stoi["<bos>"], tokenizer.stoi["<user>"]]
             + tokenizer.encode(pair["user"])
             + [tokenizer.stoi["<sep>"], tokenizer.stoi["<assistant>"]]
             + [tokenizer.stoi[language_tag(pair["assistant"])]]
-            + tokenizer.encode(pair["assistant"])
-            + [tokenizer.eos]
         )
+        body = tokenizer.encode(pair["assistant"]) + [tokenizer.eos]
+        return head + body, len(head)
 
-    sequences = [encode_pair(p) for p in pairs]
+    encoded = [encode_pair(p) for p in pairs]
+    sequences = [ids for ids, _ in encoded]
+    answer_starts = [start for _, start in encoded]
+    supervised = sum(len(ids) - start for ids, start in encoded)
+    total_tokens = sum(len(ids) for ids in sequences)
+    print(f"  supervision: {supervised:,} of {total_tokens:,} tokens "
+          f"({supervised/max(total_tokens,1):.1%}) -- the answer only")
 
     if args.reward_weighting:
         weights = [0.5 + 0.5 * score_hindi(p["assistant"]).score / 100.0 for p in pairs]
@@ -325,17 +341,27 @@ def main() -> None:
                 picks = np.concatenate([picks[: args.batch - take],
                                         np.array([hippocampus[i] for i in replay])])
             rows = []
+            masks = []
             for index in picks:
                 row = sequences[index][: args.seq_len]
+                start = answer_starts[index]
+                m = [0] * min(start, args.seq_len) + \
+                    [1] * max(0, min(len(sequences[index]), args.seq_len) - start)
+                m = m[: args.seq_len]
                 rows.append(row + [tokenizer.pad] * (args.seq_len - len(row)))
+                masks.append(m + [0] * (args.seq_len - len(m)))
             batch = np.array(rows, dtype=np.int64)
+            mask_batch = np.array(masks, dtype=np.int64)
             x = torch.from_numpy(batch[:, :-1])
             y = torch.from_numpy(batch[:, 1:])
+            # y is the sequence shifted by one, so its mask is shifted too
+            y_mask = torch.from_numpy(mask_batch[:, 1:])
             optimiser.zero_grad()
             logits, aux_logits, hidden = model(x, return_aux=True)
             batch_weights = torch.tensor([weights[int(i)] for i in picks])
             loss, parts = combined_loss(logits, aux_logits, hidden, y, tokenizer,
-                                        args, weights=batch_weights)
+                                        args, weights=batch_weights,
+                                        token_mask=y_mask)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimiser.step()
