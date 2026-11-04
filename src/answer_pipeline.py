@@ -257,7 +257,9 @@ def answer(question: str, kb: KnowledgeBase | None, generate=None,
 
     violations = [v.detail for v in check_rules(text).errors]
     if judge is not None:
-        verdict = judge(text, hits[0].answer if hits else None)
+        # the judge needs the question as well as the answer: it checks the
+        # reply against the question and the reference together
+        verdict = judge(question, text, hits[0].answer if hits else None)
         if not verdict.passed:
             violations.extend(verdict.reasons)
 

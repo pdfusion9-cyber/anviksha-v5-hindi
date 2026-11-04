@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from answer_pipeline import KnowledgeBase, answer  # noqa: E402
 from brain_retrieval import recall  # noqa: E402
+from judge import judge as judge_gate  # noqa: E402
 from meaning_reward import score_against_reference  # noqa: E402
 
 
@@ -94,7 +95,8 @@ def main() -> None:
             result.violations = r.notes
         else:
             result = answer(row["user"], kb, generate=generate,
-                            match_threshold=args.threshold)
+                            match_threshold=args.threshold,
+                            judge=judge_gate if args.model else None)
         if result.via == "knowledge_base" and result.text == row["assistant"]:
             known_counts["correct"] += 1
         elif result.via == "knowledge_base":
@@ -119,7 +121,8 @@ def main() -> None:
             result.violations = r.notes
         else:
             result = answer(row["user"], kb, generate=generate,
-                            match_threshold=args.threshold)
+                            match_threshold=args.threshold,
+                            judge=judge_gate if args.model else None)
 
         if result.via == "knowledge_base":
             ok = score_against_reference(result.text, gold).total >= 60 if gold else False
