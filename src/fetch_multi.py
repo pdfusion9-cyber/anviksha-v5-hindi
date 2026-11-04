@@ -78,6 +78,30 @@ def from_columns(path: Path, source: str, max_prompt: int, max_reply: int, cap: 
     return pairs
 
 
+
+# ------------------------------------------------------------------ licence --
+# Availability is not permission. The dataset cards were read on 2026-11-04:
+#   smangrul/hindi_instruct_v1            MIT          -> allowed
+#   ai4bharat/indic-instruct-data-v0.1    no licence   -> denied
+# Every ai4bharat subset below inherits that missing licence, so dolly, anudesh,
+# flan_v2 and hh-rlhf are all refused. Fetching them would put unlicensed text
+# into the corpus and make the resulting checkpoint undistributable.
+SOURCE_LICENCE = {
+    "smangrul": "MIT",
+    "dolly": "NONE",
+    "anudesh": "NONE",
+    "flan_v2": "NONE",
+    "hh-rlhf": "NONE",
+}
+ALLOWED_LICENCES = {"CC0-1.0", "CC-BY-4.0", "CC-BY-SA-4.0", "MIT", "Apache-2.0",
+                    "BSD-3-Clause", "BSD-2-Clause", "PDDL-1.0", "ODC-By-1.0"}
+
+
+def licence_ok(name: str) -> bool:
+    lic = SOURCE_LICENCE.get(name, "NONE")
+    return lic in ALLOWED_LICENCES
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="data", type=Path)
@@ -93,6 +117,12 @@ def main() -> None:
         "anudesh": (from_messages, download(f"{BASE}/anudesh/hi-00000-of-00001.parquet", "anudesh.parquet")),
         "flan_v2": (from_columns, download(f"{BASE}/flan_v2/hi-00000-of-00001.parquet", "flan.parquet")),
     }
+
+    denied = [n for n in extractors if not licence_ok(n)]
+    if denied:
+        print(f"refused on licence: {', '.join(denied)}")
+        for n in denied:
+            del extractors[n]
 
     # one source at a time, appended to disk, so peak memory stays flat
     cache_dir = CACHE
@@ -131,9 +161,16 @@ def main() -> None:
     held = pool[: args.heldout]
     train = pool[args.heldout :]
 
-    unseen = from_messages(download(f"{BASE}/hh-rlhf/hi-00000-of-00001.parquet", "hh.parquet"),
-                           "hh-rlhf", args.max_prompt, args.max_reply)
-    print(f"unseen source hh-rlhf: {len(unseen)} pairs fit the window")
+    if licence_ok("hh-rlhf"):
+        unseen = from_messages(download(f"{BASE}/hh-rlhf/hi-00000-of-00001.parquet", "hh.parquet"),
+                               "hh-rlhf", args.max_prompt, args.max_reply)
+        print(f"unseen source hh-rlhf: {len(unseen)} pairs fit the window")
+    else:
+        # hh-rlhf inherits the missing ai4bharat licence, so the held-out
+        # generalisation set cannot be built from it. Held-out is drawn from the
+        # allowed pool instead, which is weaker but licensed.
+        unseen = []
+        print("hh-rlhf refused on licence; no separate unseen set")
 
     args.out.mkdir(parents=True, exist_ok=True)
     for name, rows in (("multi_train.jsonl", train), ("multi_heldout.jsonl", held),

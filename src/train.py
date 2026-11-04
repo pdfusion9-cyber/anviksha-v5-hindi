@@ -223,7 +223,19 @@ def main() -> None:
         rng = np.random.default_rng(0)
         started = time.time()
         step = 0
-        while step < args.steps:
+        # The clock budget must bound this loop. The chat stage already did that,
+        # but pretrain used args.steps directly, so a 60-minute budget stopped
+        # after 600 steps and 141 seconds and 58 minutes went unused. The
+        # deadline is checked every step; the step count is only a ceiling.
+        deadline = None
+        step_ceiling = args.steps
+        if args.clock_budget_minutes > 0:
+            deadline = started + args.clock_budget_minutes * 60
+            step_ceiling = 10**9
+        while step < step_ceiling:
+            if deadline is not None and time.time() > deadline:
+                print(f"  clock budget reached at step {step}", flush=True)
+                break
             step += 1
             model.train()
             starts = rng.integers(0, len(ids) - args.seq_len - 1, size=args.batch)

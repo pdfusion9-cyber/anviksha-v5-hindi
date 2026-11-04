@@ -78,13 +78,13 @@ jobs:
               --text hindi_corpus.txt --out runs/tok_$tok \
               --dim 192 --layers 4 --heads 4 --ffn 768 --seq-len 192 \
               --steps 500 --batch 8 --threads 2 --text-chars 3000000 \
-              || echo "  pretrain did not finish"
+
             timeout 1100 python src/train.py --stage chat --tokenizer $tok \
               --chat data/multi_train.jsonl --out runs/tok_$tok \
               --init-from runs/tok_$tok/pretrain.pt \
               --dim 192 --layers 4 --heads 4 --ffn 768 --seq-len 192 \
               --steps 800 --batch 8 --threads 2 --target-steps 0 \
-              || echo "  chat did not finish"
+
           done
 
       - name: Download the trained checkpoint

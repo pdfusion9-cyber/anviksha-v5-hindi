@@ -150,19 +150,19 @@ jobs:
             ${{ inputs.brain_mechanisms == '1' && '--multi-level --sparsity 0.01 --criticality --hippocampus --reward-weighting' || '--reward-weighting' }}
 
       - name: Held-out evaluation and safety screen
-        run: python src/eval_chat.py --heldout data/reason_heldout.jsonl --limit 200 --generate 30 || true
+        run: python src/eval_chat.py --heldout data/reason_heldout.jsonl --limit 200 --generate 30
 
       - name: Evaluate on an unseen source (hh-rlhf, never trained on)
-        run: python src/eval_unseen.py --parquet data/unseen_hh.jsonl --limit 200 || true
+        run: python src/eval_unseen.py --parquet data/unseen_hh.jsonl --limit 200
 
       - name: Strict judge -- can it answer correctly, and does it think first
         run: |
           python src/eval_path.py --checkpoint runs/chat.pt \
             --prompts data/reason_heldout.jsonl \
-            --out runs/path_eval.json --limit 150 --max-new 320 || true
+            --out runs/path_eval.json --limit 150 --max-new 320
 
       - name: Quantize to int8 and int4
-        run: python src/quantize.py --limit 100 || true
+        run: python src/quantize.py --limit 100
 
       - name: Check evaluation produced numbers
         if: always()
@@ -173,8 +173,9 @@ jobs:
           done
           if [ -n "$missing" ]; then
             echo "::error::evaluation produced no output for:$missing"
-            echo "The steps above use '|| true' so their errors are not fatal, but a"
-            echo "missing file means a script crashed. Check the log for the traceback."
+            echo "A missing result file means the step that should have written it"
+            echo "crashed. The steps no longer swallow errors, so the failing step is"
+            echo "the one whose log ends in a traceback."
             exit 1
           fi
           echo "all expected result files present"

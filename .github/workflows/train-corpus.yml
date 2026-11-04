@@ -66,8 +66,11 @@ jobs:
 
       - name: Build the chat corpus
         run: |
-          python src/build_corpus.py --out data/multi_train.jsonl --heldout data/multi_heldout.jsonl
+          # fetch_multi is what writes multi_train.jsonl. It refuses any source
+          # whose licence is not permissive, so only MIT-licensed data lands here.
+          python src/fetch_multi.py --out data --cap 12000
           wc -l data/multi_train.jsonl data/multi_heldout.jsonl
+          test -s data/multi_train.jsonl || { echo "::error::no chat pairs"; exit 1; }
 
       - name: "Step 2: pretrain and chat-tune with the answer-only loss"
         run: |

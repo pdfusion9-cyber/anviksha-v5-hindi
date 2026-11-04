@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "note": "Availability is not permission. A repository being public, or a dataset appearing on GitHub, says nothing about whether its contents may be used to train a model. This policy is applied per source and a source with no recognised licence is refused, not merely annotated.",
+  "allow": {
+    "CC0-1.0": "public domain dedication; no conditions",
+    "PDDL-1.0": "public domain dedication",
+    "CC-BY-4.0": "attribution required, training permitted",
+    "CC-BY-3.0": "attribution required, training permitted",
+    "CC-BY-SA-4.0": "attribution and share-alike; share-alike applies to the data, record it",
+    "MIT": "permissive, attribution in the notice",
+    "Apache-2.0": "permissive, attribution and NOTICE file",
+    "BSD-3-Clause": "permissive, attribution",
+    "BSD-2-Clause": "permissive, attribution",
+    "ODC-By-1.0": "attribution required",
+    "ODbL-1.0": "attribution and share-alike on derived databases",
+    "OGL-UK-3.0": "attribution required"
+  },
+  "review": {
+    "GPL-3.0": "copyleft: fine to train on, but the licence question for model weights is unsettled. Do not mix into a corpus that will be redistributed without a decision.",
+    "GPL-2.0": "as GPL-3.0",
+    "AGPL-3.0": "as GPL-3.0, with the network clause",
+    "CC-BY-NC-4.0": "non-commercial only: unusable if the model is ever sold or used commercially",
+    "CC-BY-NC-SA-4.0": "non-commercial and share-alike"
+  },
+  "deny": {
+    "NONE": "no licence stated: default copyright applies, training is not permitted",
+    "UNKNOWN": "licence could not be determined",
+    "ALL-RIGHTS-RESERVED": "explicitly reserved",
+    "PROPRIETARY": "proprietary terms",
+    "RESEARCH-ONLY": "research-only terms exclude model training for release",
+    "CC-BY-NC-ND-4.0": "non-commercial AND no-derivatives. A trained model is arguably a derivative and commercial use is excluded, so this cannot be used for training at all.",
+    "CC-BY-ND-4.0": "no derivatives: a trained model is arguably a derivative"
+  },
+  "rules": [
+    "A source with no licence field is denied. Absence is not permission.",
+    "A public repository is not an open licence. GitHub availability proves nothing.",
+    "Every kept record carries its source id, licence, attribution string and shard checksum.",
+    "Review-licensed sources are held out of the main corpus until a decision is recorded.",
+    "Attribution strings are preserved verbatim, including required notice text."
+  ]
+}

@@ -104,9 +104,9 @@ jobs:
       - name: Held-out and unseen perplexity
         run: |
           python src/eval_chat.py --checkpoint runs/chat.pt \
-            --heldout data/multi_heldout.jsonl --limit 200 --generate 20 || true
+            --heldout data/multi_heldout.jsonl --limit 200 --generate 20
           python src/eval_unseen.py --checkpoint runs/chat.pt \
-            --parquet data/unseen_hh.jsonl --limit 150 || true
+            --parquet data/unseen_hh.jsonl --limit 150
 
       - name: Compare before and after
         if: always()
