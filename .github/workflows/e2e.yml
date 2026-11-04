@@ -55,7 +55,16 @@ jobs:
             --report runs/bpe_report.json
           cat runs/bpe_report.json
 
-      - name: End-to-end
+      - name: "End-to-end (recognition memory: familiarity + recollection)"
+        run: |
+          python src/e2e_test.py \
+            --brain \
+            --kb data/multi_train.jsonl \
+            --test data/multi_heldout.jsonl \
+            --limit ${{ inputs.limit }} \
+            --out runs/e2e_brain.json
+
+      - name: End-to-end (similarity threshold, for comparison)
         run: |
           python src/e2e_test.py \
             --kb data/multi_train.jsonl \
@@ -72,6 +81,7 @@ jobs:
           name: e2e-results
           path: |
             runs/e2e.json
+            runs/e2e_brain.json
             runs/e2e_sweep.json
             runs/bpe4096.json
             runs/bpe_report.json

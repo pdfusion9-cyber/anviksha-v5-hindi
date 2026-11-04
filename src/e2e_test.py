@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from answer_pipeline import KnowledgeBase, answer  # noqa: E402
+from brain_retrieval import recall  # noqa: E402
 from meaning_reward import score_against_reference  # noqa: E402
 
 
@@ -40,6 +41,9 @@ def main() -> None:
                         help="similarity needed before a stored answer is trusted")
     parser.add_argument("--out", default="runs/e2e.json", type=Path)
     parser.add_argument("--samples", default=12, type=int)
+    parser.add_argument("--brain", action="store_true",
+                        help="use recognition-memory recall (familiarity + "
+                             "recollection) instead of a similarity threshold")
     parser.add_argument("--sweep", default="",
                         help="comma separated thresholds to compare, e.g. 0.62,0.75,0.85")
     args = parser.parse_args()
@@ -70,8 +74,18 @@ def main() -> None:
 
     known_counts = {"correct": 0, "wrong": 0, "refused": 0}
     for row in known:
-        result = answer(row["user"], kb, generate=None,
-                        match_threshold=args.threshold)
+        if args.brain:
+            r = recall(row["user"], kb)
+            class _R:
+                pass
+            result = _R()
+            result.via = "knowledge_base" if r.answered else "refused"
+            result.text = r.answer
+            result.confidence = r.familiarity
+            result.violations = r.notes
+        else:
+            result = answer(row["user"], kb, generate=None,
+                            match_threshold=args.threshold)
         if result.via == "knowledge_base" and result.text == row["assistant"]:
             known_counts["correct"] += 1
         elif result.via == "knowledge_base":
@@ -85,8 +99,18 @@ def main() -> None:
 
     for row in test:
         gold = row.get("assistant", "")
-        result = answer(row["user"], kb, generate=None,
-                        match_threshold=args.threshold)
+        if args.brain:
+            r = recall(row["user"], kb)
+            class _R:
+                pass
+            result = _R()
+            result.via = "knowledge_base" if r.answered else "refused"
+            result.text = r.answer
+            result.confidence = r.familiarity
+            result.violations = r.notes
+        else:
+            result = answer(row["user"], kb, generate=None,
+                            match_threshold=args.threshold)
 
         if result.via == "knowledge_base":
             ok = score_against_reference(result.text, gold).total >= 60 if gold else False
