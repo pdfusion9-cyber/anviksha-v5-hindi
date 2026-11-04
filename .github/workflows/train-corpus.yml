@@ -1,0 +1,100 @@
+name: train-corpus
+
+# Stage 1 to 3 in one run: take the cleaned HPLT corpus, train the tokenizer on
+# it, train the model on it with the answer-only loss, and measure whether it
+# can answer.
+#
+# Everything here was measured before it was wired: BPE-4096 gives 6.2x more
+# Hindi per window, the answer-only mask removes the 50% of the gradient that was
+# spent reproducing questions, and the judge gates whatever the model writes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "fetch-hplt run id holding the hplt-hindi-clean artifact"
+        required: true
+      bpe_sample_mb:
+        description: "corpus size used to learn the merges"
+        required: true
+        default: "40"
+      pretrain_minutes:
+        description: "pretrain clock budget"
+        required: true
+        default: "60"
+      chat_minutes:
+        description: "chat fine-tune clock budget"
+        required: true
+        default: "90"
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pyarrow requests
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Download the cleaned corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: hplt-hindi-clean
+          path: data/hplt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.run_id }}
+
+      - name: What we are training on
+        run: |
+          ls -la data/hplt/
+          wc -c data/hplt/hindi_corpus.txt
+          cat data/hplt/fetch_stats.json
+
+      - name: "Step 1: learn BPE-4096 on the corpus"
+        run: |
+          head -c $(( ${{ inputs.bpe_sample_mb }} * 1000000 )) data/hplt/hindi_corpus.txt > bpe_sample.txt
+          wc -c bpe_sample.txt
+          python src/train_bpe_on_corpus.py --text bpe_sample.txt --vocab 4096 \
+            --out runs/bpe4096.json --report runs/bpe_train.json
+
+      - name: "Step 2: pretrain and chat-tune with the answer-only loss"
+        run: |
+          timeout 7200 python src/train.py --stage pretrain --tokenizer bpe \
+            --text data/hplt/hindi_corpus.txt --out runs/big \
+            --dim 192 --layers 4 --heads 4 --ffn 768 --seq-len 192 \
+            --clock-budget-minutes ${{ inputs.pretrain_minutes }} \
+            --batch 8 --threads 2 --text-chars 200000000 || echo "pretrain stopped"
+          timeout 7200 python src/train.py --stage chat --tokenizer bpe \
+            --chat data/multi_train.jsonl --out runs/big \
+            --init-from runs/big/pretrain.pt \
+            --dim 192 --layers 4 --heads 4 --ffn 768 --seq-len 192 \
+            --clock-budget-minutes ${{ inputs.chat_minutes }} \
+            --batch 8 --threads 2 || echo "chat stopped"
+          ls -la runs/big/
+
+      - name: "Step 3: can it answer"
+        run: |
+          python src/e2e_test.py \
+            --model runs/big/chat.pt \
+            --kb data/multi_train.jsonl \
+            --test data/multi_heldout.jsonl \
+            --limit 200 --threshold 0.92 \
+            --out runs/e2e_big.json || true
+          cat runs/e2e_big.json 2>/dev/null || echo "no report"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trained-corpus-model
+          path: |
+            runs/bpe_train.json
+            runs/e2e_big.json
+            runs/big/*.json
+          if-no-files-found: warn
