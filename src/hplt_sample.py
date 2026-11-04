@@ -78,6 +78,14 @@ def stream_lines(url: str, max_bytes: int):
                     yield line
 
 
+def shingles(text: str, n: int = 5, limit: int = 400) -> set[str]:
+    """Word shingles, which catch syndicated copies that exact hashing misses."""
+    words = WORD.findall(text.lower())[:limit]
+    if len(words) < n:
+        return set()
+    return {" ".join(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
 def looks_mojibake(text: str) -> bool:
     if not text:
         return False
@@ -96,6 +104,7 @@ def analyse(url: str, label: str, max_bytes: int, max_docs: int) -> dict:
     empty = 0
     short = 0
     hashes: Counter = Counter()
+    near_seen: dict[frozenset, int] = {}
     lengths: list[int] = []
     sample_texts: list[str] = []
 
@@ -127,12 +136,20 @@ def analyse(url: str, label: str, max_bytes: int, max_docs: int) -> dict:
         else:
             other_docs += 1
         hashes[hashlib.sha256(text[:2000].encode("utf-8")).hexdigest()[:16]] += 1
+        # near-duplicates: keep a compact signature of the first shingle set, and
+        # compare against signatures already seen. Bounded so memory stays flat.
+        if docs <= 20000:
+            sig = frozenset(shingles(text))
+            if sig:
+                near_seen[sig] = near_seen.get(sig, 0) + 1
         if len(sample_texts) < 3 and 200 < len(text) < 700:
             sample_texts.append(text[:300])
         if docs >= max_docs:
             break
 
     dup = sum(c - 1 for c in hashes.values() if c > 1)
+    near_dup = sum(c - 1 for c in near_seen.values() if c > 1)
+    near_checked = sum(near_seen.values())
     lengths.sort()
     med = lengths[len(lengths) // 2] if lengths else 0
     res = {
@@ -143,7 +160,13 @@ def analyse(url: str, label: str, max_bytes: int, max_docs: int) -> dict:
         "mojibake": mojibake, "mojibake_rate": round(mojibake / max(docs, 1), 4),
         "empty": empty, "under_100_chars": short,
         "duplicate_docs": dup, "duplicate_rate": round(dup / max(docs, 1), 4),
+        "near_duplicates": near_dup,
+        "near_duplicate_rate": round(near_dup / max(near_checked, 1), 4),
+        "near_checked": near_checked,
         "unique_docs": len(hashes),
+        # a rough Hindi token estimate: about 3.5 characters per token in this
+        # script, which is close to the measured 6.26 bytes (3.1 chars) per token
+        "token_estimate": int(deva_chars / 3.1),
     }
     print(f"  documents            {docs:,}")
     print(f"  characters           {chars:,}   median {med:,}")
@@ -155,6 +178,9 @@ def analyse(url: str, label: str, max_bytes: int, max_docs: int) -> dict:
     print(f"  empty                {empty:,}")
     print(f"  under 100 chars      {short:,}  ({short/max(docs,1):.1%})")
     print(f"  duplicate documents  {dup:,}  ({res['duplicate_rate']:.2%})")
+    print(f"  near-duplicates      {near_dup:,}  of {near_checked:,} checked "
+          f"({res['near_duplicate_rate']:.2%})")
+    print(f"  Hindi token estimate {res['token_estimate']:,}")
     for t in sample_texts[:2]:
         print(f"    sample: {t[:150]!r}")
     return res
@@ -165,7 +191,10 @@ def main() -> None:
     ap.add_argument("--map-url", default=MAP_URL)
     ap.add_argument("--max-bytes", type=int, default=120_000_000,
                     help="decompressed bytes per shard; keeps the run short")
-    ap.add_argument("--max-docs", type=int, default=60_000)
+    ap.add_argument("--max-docs", type=int, default=200_000)
+    ap.add_argument("--bins", default="",
+                    help="comma-separated WDS bins to sample, e.g. 8,9,10; "
+                         "default is the highest and the lowest")
     ap.add_argument("--out", type=Path, default=Path("runs/hplt_sample.json"))
     args = ap.parse_args()
 
@@ -181,11 +210,18 @@ def main() -> None:
         return int(m.group(1)) if m else -1
 
     ranked = sorted(urls, key=bin_of)
-    picks = []
-    if ranked:
-        picks.append((f"WDS bin {bin_of(ranked[-1])} (highest quality)", ranked[-1]))
-    if len(ranked) > 1:
-        picks.append((f"WDS bin {bin_of(ranked[0])} (lowest quality)", ranked[0]))
+    if args.bins:
+        wanted = {int(b) for b in args.bins.split(",") if b.strip()}
+        picks = [(f"WDS bin {bin_of(u)}", u) for u in ranked if bin_of(u) in wanted]
+        missing = wanted - {bin_of(u) for u in ranked}
+        if missing:
+            print(f"  bins requested but not published: {sorted(missing)}")
+    else:
+        picks = []
+        if ranked:
+            picks.append((f"WDS bin {bin_of(ranked[-1])} (highest quality)", ranked[-1]))
+        if len(ranked) > 1:
+            picks.append((f"WDS bin {bin_of(ranked[0])} (lowest quality)", ranked[0]))
 
     results = []
     for label, url in picks:

@@ -19,7 +19,11 @@ on:
       max_docs:
         description: "documents per shard"
         required: true
-        default: "60000"
+        default: "200000"
+      bins:
+        description: "WDS bins to sample, e.g. 8,9,10 (blank = best and worst)"
+        required: true
+        default: "8,9,10"
 
 jobs:
   sample:
@@ -45,6 +49,7 @@ jobs:
           python src/hplt_sample.py \
             --max-bytes ${{ inputs.max_bytes }} \
             --max-docs ${{ inputs.max_docs }} \
+            --bins "${{ inputs.bins }}" \
             --out runs/hplt_sample.json
 
       - uses: actions/upload-artifact@v4
