@@ -49,6 +49,16 @@ jobs:
           cat data/corpus_stats.json
           wc -l data/multi_train.jsonl data/multi_heldout.jsonl
 
+      - name: "Data audit: the six explanations that are not model size"
+        run: |
+          python src/data_audit.py \
+            --kb data/multi_train.jsonl \
+            --heldout data/multi_heldout.jsonl \
+            --seq-len 192 --limit 60000
+
+      - name: "Verified base: what the schema accepts and refuses"
+        run: python src/verified_kb.py
+
       - name: Train BPE-4096 and measure what fits in a 256-token context
         run: |
           python src/train_bpe.py \
