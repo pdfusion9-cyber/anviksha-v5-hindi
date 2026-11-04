@@ -30,7 +30,16 @@ def main() -> None:
     ap.add_argument("--window", type=int, default=192)
     args = ap.parse_args()
 
-    text = args.text.read_text(encoding="utf-8")
+    # The sample is cut with `head -c`, which counts bytes. Devanagari characters
+    # are three bytes each, so the cut lands mid-character roughly two times in
+    # three and a strict decode fails with "unexpected end of data" at exactly
+    # the byte boundary. Trim back to a complete character before decoding.
+    raw = args.text.read_bytes()
+    while raw and (raw[-1] & 0xC0) == 0x80:
+        raw = raw[:-1]          # continuation byte, step back
+    if raw and raw[-1] >= 0xC0:
+        raw = raw[:-1]          # lead byte with no room for its continuation
+    text = raw.decode("utf-8", errors="ignore")
     print(f"learning merges from {len(text):,} characters")
 
     t0 = time.time()
