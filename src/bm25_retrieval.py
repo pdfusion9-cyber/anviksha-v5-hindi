@@ -114,17 +114,38 @@ class Decision:
 
 
 def answer_question(question: str, rows: list[dict], bm25: BM25, *,
-                    rerank_floor: float = 0.55, k: int = 5) -> Decision:
+                    rerank_floor: float = 0.55, margin_floor: float = 0.25,
+                    k: int = 5) -> Decision:
+    """Answer only when the winner is clearly ahead of the runner-up.
+
+    BM25 scores are not comparable between queries: 1.5 can be a perfect match
+    for a short question and a poor one for a long question, because the score is
+    a sum over query terms and every query has a different number of them. An
+    absolute floor therefore cannot work, and using one answered 85% of unseen
+    questions wrongly -- every question had some best match with a score above
+    zero.
+
+    The margin between the top two is comparable, because it is measured on the
+    same query. A winner far ahead of its runner-up was actually found; two
+    candidates level with each other means the query matched nothing in
+    particular.
+    """
     cands = bm25.top_k(question, k=k)
     if not cands or cands[0][0] <= 0:
         return Decision(None, 0.0, 0.0, "no candidate shares a term")
 
     best_score, best_i = cands[0]
+    runner = cands[1][0] if len(cands) > 1 else 0.0
+    margin = (best_score - runner) / max(best_score, 1e-9)
+
     answer = rows[best_i]["assistant"]
     rr, notes = rerank(question, answer)
     if rr < rerank_floor:
         return Decision(None, best_score, rr, "; ".join(notes) or "rerank low")
-    return Decision(answer, best_score, rr, "reranked")
+    if margin < margin_floor:
+        return Decision(None, best_score, rr,
+                        f"winner only {margin:.0%} ahead of the runner-up")
+    return Decision(answer, best_score, rr, f"reranked, {margin:.0%} ahead")
 
 
 def main() -> None:
