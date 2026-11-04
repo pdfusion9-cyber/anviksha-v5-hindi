@@ -55,6 +55,34 @@ jobs:
             --report runs/bpe_report.json
           cat runs/bpe_report.json
 
+      - name: Download the trained checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: v5-hindi-run
+          path: runs/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 41565319306
+        continue-on-error: true
+
+      - name: Locate the checkpoint
+        id: ckpt
+        run: |
+          found=$(find runs -name "chat.pt" | head -1)
+          echo "path=$found" >> "$GITHUB_OUTPUT"
+          echo "checkpoint: ${found:-none}"
+          ls -la runs/ | head -20
+
+      - name: "Reasoning fallback: model answers, judge gates it"
+        if: steps.ckpt.outputs.path != ''
+        run: |
+          python src/e2e_test.py \
+            --model "${{ steps.ckpt.outputs.path }}" \
+            --kb data/multi_train.jsonl \
+            --test data/multi_heldout.jsonl \
+            --limit ${{ inputs.limit }} \
+            --threshold 0.92 \
+            --out runs/e2e_reasoning.json
+
       - name: "What the model answers, by kind of question"
         run: |
           python src/show_answers.py \
@@ -98,6 +126,7 @@ jobs:
             runs/e2e.json
             runs/e2e_brain.json
             runs/answers_by_kind.json
+            runs/e2e_reasoning.json
             runs/e2e_sweep.json
             runs/bpe4096.json
             runs/bpe_report.json

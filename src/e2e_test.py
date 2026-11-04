@@ -41,6 +41,10 @@ def main() -> None:
                         help="similarity needed before a stored answer is trusted")
     parser.add_argument("--out", default="runs/e2e.json", type=Path)
     parser.add_argument("--samples", default=12, type=int)
+    parser.add_argument("--model", type=Path, default=None,
+                        help="checkpoint for the reasoning fallback; without it "
+                             "only retrieval runs and everything else refuses")
+    parser.add_argument("--max-new", type=int, default=200)
     parser.add_argument("--brain", action="store_true",
                         help="use recognition-memory recall (familiarity + "
                              "recollection) instead of a similarity threshold")
@@ -49,6 +53,11 @@ def main() -> None:
     args = parser.parse_args()
 
     kb = KnowledgeBase.load(args.kb)
+    generate = None
+    if args.model is not None:
+        from model_answer import make_generate
+        generate = make_generate(args.model, max_new=args.max_new)
+        print(f"reasoning fallback: {args.model}")
     test = [json.loads(line) for line in
             args.test.read_text(encoding="utf-8").splitlines() if line.strip()]
     test = test[: args.limit]
@@ -84,7 +93,7 @@ def main() -> None:
             result.confidence = r.familiarity
             result.violations = r.notes
         else:
-            result = answer(row["user"], kb, generate=None,
+            result = answer(row["user"], kb, generate=generate,
                             match_threshold=args.threshold)
         if result.via == "knowledge_base" and result.text == row["assistant"]:
             known_counts["correct"] += 1
@@ -109,7 +118,7 @@ def main() -> None:
             result.confidence = r.familiarity
             result.violations = r.notes
         else:
-            result = answer(row["user"], kb, generate=None,
+            result = answer(row["user"], kb, generate=generate,
                             match_threshold=args.threshold)
 
         if result.via == "knowledge_base":
@@ -150,12 +159,12 @@ def main() -> None:
               f"{'unseen ok':>10} {'unseen WRONG':>13}")
         for th in thresholds:
             kc = sum(1 for row in known
-                     if answer(row["user"], kb, generate=None,
+                     if answer(row["user"], kb, generate=generate,
                                match_threshold=th).text == row["assistant"])
             uw = 0
             uc = 0
             for row in test:
-                res = answer(row["user"], kb, generate=None, match_threshold=th)
+                res = answer(row["user"], kb, generate=generate, match_threshold=th)
                 if res.via == "knowledge_base":
                     ok = score_against_reference(res.text, row.get("assistant", "")).total >= 60
                     if ok:
