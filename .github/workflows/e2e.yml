@@ -37,6 +37,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install numpy pyarrow requests
+          # the reasoning fallback runs the model, so torch has to be here; the
+          # CPU wheel keeps this from pulling a multi-gigabyte CUDA build
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Build the full corpus
         run: |
