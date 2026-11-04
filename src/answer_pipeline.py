@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from rule_engine import check as check_rules  # noqa: E402
+from arith_answer import answer_arithmetic  # noqa: E402
 
 DEVANAGARI = re.compile(r"[\u0900-\u097f]")
 WORD = re.compile(r"[\u0900-\u097f]+|[A-Za-z][A-Za-z'-]+")
@@ -223,6 +224,14 @@ def answer(question: str, kb: KnowledgeBase | None, generate=None,
            match_threshold: float = 0.62, exact_threshold: float = 0.95,
            judge=None) -> Answer:
     """Retrieve, then rules, then the model. Never return something unchecked."""
+    # 0. arithmetic is computed, not retrieved and not guessed. The model cannot
+    #    carry digits, so leaving it to the model guarantees a wrong answer, and
+    #    a table is slower than the CPU. Exact integer arithmetic is both faster
+    #    and right.
+    arith = answer_arithmetic(question)
+    if arith is not None:
+        return Answer(arith.text, "arithmetic", 1.0, [])
+
     hits = kb.search(question, k=3) if kb else []
 
     # 1. a stored answer that matches well enough is the answer: it was checked
