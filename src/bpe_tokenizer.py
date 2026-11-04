@@ -23,6 +23,7 @@ never seen, which matters more for Hindi than for English.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 import sys
 
@@ -37,6 +38,7 @@ class BPETokenizer:
         self.bpe = bpe
         self.specials = list(specials or SPECIALS)
         self.base = 256 + len(bpe.merges)
+        self._cache: dict[str, list[int]] = {}
         self.itos = ([f"<byte:{i}>" for i in range(256)]
                      + [f"<merge:{i}>" for i in range(len(bpe.merges))]
                      + self.specials)
@@ -58,7 +60,16 @@ class BPETokenizer:
         return self.base + len(self.specials)
 
     def encode(self, text: str, add_eos: bool = False) -> list[int]:
-        ids = self.bpe.encode(text)
+        """Encode, caching per word.
+
+        Hindi text repeats its words heavily, so a cache over word forms turns
+        encoding a multi-gigabyte corpus from hours into minutes. The cache is
+        bounded so a long tail of rare words cannot grow it without limit.
+        """
+        cache = self._cache
+        if len(cache) > 400_000:
+            cache.clear()
+        ids = self.bpe.encode(text, cache=cache)
         if add_eos:
             ids.append(self.eos)
         return ids

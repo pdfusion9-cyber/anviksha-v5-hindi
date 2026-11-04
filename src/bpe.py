@@ -122,10 +122,25 @@ class BPE:
             ids = ids[:best_at] + [256 + self.rank[pair]] + ids[best_at + 2:]
         return ids
 
-    def encode(self, text: str) -> list[int]:
+    def encode(self, text: str, cache: dict | None = None) -> list[int]:
+        """Encode text, optionally caching the result per word.
+
+        The cache lives here rather than outside because this function owns the
+        whitespace handling: it splits on whitespace and re-inserts a single
+        space between words. An outside cache that splits the text itself gets
+        that wrong -- a lone " " produces no words and therefore no ids, so every
+        space disappears. Hindi repeats its words heavily, so the cache is what
+        makes encoding a multi-gigabyte corpus take minutes instead of hours.
+        """
         out: list[int] = []
         for word in text.split():
-            ids = self._encode_word(list(word.encode("utf-8")))
+            ids = None
+            if cache is not None:
+                ids = cache.get(word)
+            if ids is None:
+                ids = self._encode_word(list(word.encode("utf-8")))
+                if cache is not None:
+                    cache[word] = ids
             if out:
                 out.append(32)  # keep the space as a plain byte
             out.extend(ids)
