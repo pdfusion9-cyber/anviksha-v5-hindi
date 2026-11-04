@@ -46,6 +46,15 @@ jobs:
           cat data/corpus_stats.json
           wc -l data/multi_train.jsonl data/multi_heldout.jsonl
 
+      - name: Train BPE-4096 and measure what fits in a 256-token context
+        run: |
+          python src/train_bpe.py \
+            --corpus data/multi_train.jsonl \
+            --vocab 4096 \
+            --out runs/bpe4096.json \
+            --report runs/bpe_report.json
+          cat runs/bpe_report.json
+
       - name: End-to-end
         run: |
           python src/e2e_test.py \
@@ -63,4 +72,7 @@ jobs:
           name: e2e-results
           path: |
             runs/e2e.json
+            runs/e2e_sweep.json
+            runs/bpe4096.json
+            runs/bpe_report.json
             data/corpus_stats.json

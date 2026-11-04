@@ -130,9 +130,53 @@ class Hit:
 
 
 @dataclass
+class InvertedIndex:
+    """token -> the rows that contain it.
+
+    Scoring every row for every question is what made the threshold sweep take
+    hours: 5 thresholds x 600 questions x 59,430 rows is 178 million similarity
+    computations. An index turns that into "look up the rare words, score only
+    the rows that contain them", which is how a search engine does it and is the
+    difference between a test that finishes and one that gets cancelled.
+
+    Only distinctive tokens gather candidates. A word present in most questions
+    identifies nothing, so letting it pull in thousands of rows would undo the
+    point of the index.
+    """
+
+    postings: dict[str, list[int]] = field(default_factory=dict)
+    idf: dict[str, float] = field(default_factory=dict)
+
+    @classmethod
+    def build(cls, questions: list[str], idf: dict[str, float]) -> "InvertedIndex":
+        postings: dict[str, list[int]] = {}
+        for i, q in enumerate(questions):
+            for tok in tokens(q):
+                postings.setdefault(tok, []).append(i)
+        return cls(postings, idf)
+
+    def candidates(self, question: str, cap: int = 4000) -> list[int]:
+        ranked = sorted(tokens(question), key=lambda t: -self.idf.get(t, 1.0))
+        cands: set[int] = set()
+        for tok in ranked:
+            if self.idf.get(tok, 1.0) < 1.5:
+                continue
+            cands.update(self.postings.get(tok, ()))
+            if len(cands) >= cap:
+                break
+        if not cands:
+            for tok in ranked:
+                cands.update(self.postings.get(tok, ()))
+                if len(cands) >= cap:
+                    break
+        return list(cands)
+
+
+@dataclass
 class KnowledgeBase:
     rows: list[dict] = field(default_factory=list)
     idf: dict[str, float] = field(default_factory=dict)
+    index: InvertedIndex | None = None
 
     @classmethod
     def load(cls, path: Path) -> "KnowledgeBase":
@@ -140,13 +184,24 @@ class KnowledgeBase:
         for line in Path(path).read_text(encoding="utf-8").splitlines():
             if line.strip():
                 rows.append(json.loads(line))
-        return cls(rows, build_idf([r["user"] for r in rows]))
+        idf = build_idf([r["user"] for r in rows])
+        return cls(rows, idf, InvertedIndex.build([r["user"] for r in rows], idf))
 
     def search(self, question: str, k: int = 3) -> list[Hit]:
-        scored = [(similarity(question, r["user"], self.idf), r) for r in self.rows]
+        if self.index is not None:
+            cands = self.index.candidates(question)
+            scored = sorted(
+                ((similarity(question, self.rows[i]["user"], self.idf), i)
+                 for i in cands), key=lambda x: -x[0])[:k]
+            return [Hit(self.rows[i]["user"], self.rows[i]["assistant"],
+                        round(sc, 3), self.rows[i].get("source", ""))
+                    for sc, i in scored]
+        scored = [(similarity(question, r["user"], self.idf), i)
+                  for i, r in enumerate(self.rows)]
         scored.sort(key=lambda x: -x[0])
-        return [Hit(r["user"], r["assistant"], round(s, 3), r.get("source", ""))
-                for s, r in scored[:k]]
+        return [Hit(self.rows[i]["user"], self.rows[i]["assistant"],
+                    round(sc, 3), self.rows[i].get("source", ""))
+                for sc, i in scored[:k]]
 
 
 @dataclass
