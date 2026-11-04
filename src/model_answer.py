@@ -34,14 +34,26 @@ from reasoning import parse  # noqa: E402
 def make_generate(checkpoint: Path, *, max_new: int = 200, temperature: float = 0.8,
                   top_k: int = 40, seed: int = 0) -> Callable[[str], str | None]:
     """Return a generate(question) -> answer text, or None if it did not answer."""
+    import json
+
     import torch
 
     from checkpoint import build_from_checkpoint
-    from tokenizer import CharTokenizer  # noqa: F401
+    from tokenizer import CharTokenizer
 
-    model, tokenizer, cfg = build_from_checkpoint(checkpoint)
+    # the tokenizer is not stored inside the checkpoint, so it is read from the
+    # tokenizer.json written beside it; the model is rebuilt from the checkpoint's
+    # own saved args, so the architecture always matches what was trained
+    tok_path = Path(checkpoint).parent / "tokenizer.json"
+    if not tok_path.is_file():
+        raise FileNotFoundError(f"no tokenizer.json beside {checkpoint}")
+    data = json.loads(tok_path.read_text(encoding="utf-8"))
+    vocab = data["vocab"] if isinstance(data, dict) and "vocab" in data else data
+    tokenizer = CharTokenizer(vocab)
+
+    model, cfg = build_from_checkpoint(Path(checkpoint), tokenizer)
     model.eval()
-    seq_len = cfg["seq_len"]
+    seq_len = cfg.get("seq_len", 192)
 
     def generate(question: str) -> str | None:
         ids = ([tokenizer.stoi["<bos>"], tokenizer.stoi["<user>"]]
