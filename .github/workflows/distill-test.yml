@@ -1,0 +1,58 @@
+name: distill-test
+
+# Measure the model on the data it was trained on.
+#
+# Every evaluation so far used held-out questions and scored zero. That says the
+# model cannot generalise but not why: one that never fitted its own training
+# answers has a capacity problem, and one that reproduces them perfectly but
+# fails on anything new has a memorisation problem. Those need opposite
+# responses, and a held-out score cannot tell them apart.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "train-corpus run id holding the trained-corpus-model artifact"
+        required: true
+        default: "41821971051"
+      limit:
+        description: "training pairs to measure on"
+        required: true
+        default: "100"
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Build the same chat corpus the model was trained on
+        run: |
+          python src/fetch_multi.py --out data --cap 12000
+          wc -l data/multi_train.jsonl
+
+      - name: Measure on training data
+        run: |
+          python src/distill_test.py \
+            --checkpoint runs/big/chat.pt \
+            --pretrain runs/big/pretrain.pt \
+            --chat data/multi_train.jsonl \
+            --limit ${{ inputs.limit }} \
+            --out runs/distill.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: distill-results
+          path: runs/distill.json
+          if-no-files-found: warn
