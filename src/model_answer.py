@@ -39,17 +39,35 @@ def make_generate(checkpoint: Path, *, max_new: int = 200, temperature: float = 
     import torch
 
     from checkpoint import build_from_checkpoint
-    from tokenizer import CharTokenizer
+    from bpe_tokenizer import load_any
 
-    # the tokenizer is not stored inside the checkpoint, so it is read from the
-    # tokenizer.json written beside it; the model is rebuilt from the checkpoint's
-    # own saved args, so the architecture always matches what was trained
+    # The tokenizer is not stored inside the checkpoint, so it is read from the
+    # tokenizer.json beside it -- with load_any, which reads the kind field. This
+    # was CharTokenizer(vocab) for a long time, and a BPE checkpoint then failed
+    # with "copying a param with shape [4096, 192] ... current model is [3, 192]"
+    # because CharTokenizer reads ["vocab"], which is an int for a word-level
+    # file, and the result was a tokenizer of the wrong size.
+    #
+    # The size is now checked against the checkpoint's own embedding. A mismatch
+    # is a hard error here rather than a confusing shape error three frames down,
+    # and the message says which file and which sizes.
+    import torch as _torch
+
     tok_path = Path(checkpoint).parent / "tokenizer.json"
     if not tok_path.is_file():
-        raise FileNotFoundError(f"no tokenizer.json beside {checkpoint}")
-    data = json.loads(tok_path.read_text(encoding="utf-8"))
-    vocab = data["vocab"] if isinstance(data, dict) and "vocab" in data else data
-    tokenizer = CharTokenizer(vocab)
+        found = sorted(Path(checkpoint).parent.rglob("tokenizer.json"))
+        if not found:
+            raise FileNotFoundError(f"no tokenizer.json near {checkpoint}")
+        tok_path = found[0]
+    tokenizer = load_any(tok_path)
+
+    state = _torch.load(Path(checkpoint), weights_only=False)
+    embed = state["model"].get("embed.weight")
+    if embed is not None and int(embed.shape[0]) != tokenizer.size:
+        raise ValueError(
+            f"tokenizer {tok_path} has {tokenizer.size} entries but the "
+            f"checkpoint's embedding has {int(embed.shape[0])} rows. The "
+            f"tokenizer is not the one this model was trained with.")
 
     model, cfg = build_from_checkpoint(Path(checkpoint), tokenizer)
     model.eval()
