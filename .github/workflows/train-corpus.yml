@@ -66,11 +66,8 @@ jobs:
 
       - name: Build the chat corpus
         run: |
-          # fetch_multi is what writes multi_train.jsonl. It refuses any source
-          # whose licence is not permissive, so only MIT-licensed data lands here.
-          python src/fetch_multi.py --out data --cap 12000
+          python src/build_corpus.py --out data/multi_train.jsonl --heldout data/multi_heldout.jsonl
           wc -l data/multi_train.jsonl data/multi_heldout.jsonl
-          test -s data/multi_train.jsonl || { echo "::error::no chat pairs"; exit 1; }
 
       - name: "Step 2: pretrain and chat-tune with the answer-only loss"
         run: |
@@ -88,6 +85,19 @@ jobs:
             --steps 1000000 \
             --batch 8 --threads 2
           ls -la runs/big/
+
+      - name: "Step 2b: measure on the data it was trained on"
+        run: |
+          # The held-out score says the model cannot generalise but not why. If it
+          # never fitted its own training answers that is a capacity limit; if it
+          # reproduces them and still fails on new questions that is memorisation.
+          # Teacher-forced accuracy separates the two with no sampling noise.
+          python src/distill_test.py \
+            --checkpoint runs/big/chat.pt \
+            --pretrain runs/big/pretrain.pt \
+            --chat data/multi_train.jsonl \
+            --limit 100 \
+            --out runs/distill.json
 
       - name: "Step 3: can it answer"
         run: |
@@ -110,5 +120,8 @@ jobs:
           path: |
             runs/bpe_train.json
             runs/e2e_big.json
+            runs/distill.json
             runs/big/*.json
+            runs/big/*.pt
+            runs/big/tokenizer.json
           if-no-files-found: warn
