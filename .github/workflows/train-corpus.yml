@@ -99,6 +99,21 @@ jobs:
             --limit 100 \
             --out runs/distill.json
 
+      - name: "Step 2c: audit the weights and the reasoning"
+        run: |
+          # The MIT weight-space result is a diagnostic here: a failure has a
+          # location, and looking at the weights says whether it is localised or
+          # diffuse. Seven checks, each with a meaning, plus four reasoning
+          # measures that similarity to a reference cannot make -- whether the
+          # model echoes its question, whether it answers different questions
+          # differently, whether it is consistent across seeds, and where its
+          # accuracy decays.
+          python src/weight_audit.py \
+            --checkpoint runs/big/chat.pt \
+            --chat data/multi_train.jsonl \
+            --limit 8 \
+            --out runs/weight_audit.json
+
       - name: "Step 3: can it answer"
         run: |
           python src/e2e_test.py \
@@ -121,6 +136,7 @@ jobs:
             runs/bpe_train.json
             runs/e2e_big.json
             runs/distill.json
+            runs/weight_audit.json
             runs/big/*.json
             runs/big/*.pt
             runs/big/tokenizer.json
