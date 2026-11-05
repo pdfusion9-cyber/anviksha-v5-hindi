@@ -23,6 +23,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+TERMINALS = ".!?…:;\"')]।॥"
 THINK_OPEN, THINK_CLOSE = "<think>", "</think>"
 ANS_OPEN, ANS_CLOSE = "<ans>", "</ans>"
 
@@ -113,7 +114,23 @@ def wrap(prompt: str, answer: str, reference: str | None = None,
 
 
 def parse(reply: str) -> Parsed:
-    """Pull the trace and the answer apart. An answer with no <ans> is not an answer."""
+    """Pull the trace and the answer apart.
+
+    Two training conventions exist in this project and both are valid:
+
+      structured   the reply carries <think>...</think><ans>...</ans>
+      plain        the reply is just the answer, because the chat corpus has no
+                   markers at all -- fetch_multi writes bare question/answer pairs
+
+    The first version required <ans> unconditionally, so every reply from a model
+    trained on the plain corpus parsed as incomplete and make_generate returned
+    None. That is why the model reported "produced nothing" on all 200 held-out
+    questions while its chat loss had fallen to 0.81: it was answering, and the
+    parser was throwing the answers away.
+
+    A reply that opens <think> but never closes <ans> is still refused -- that is
+    a genuinely unfinished structured answer, not a plain one.
+    """
     reply = reply or ""
     trace = ""
     if THINK_OPEN in reply:
@@ -127,8 +144,17 @@ def parse(reply: str) -> Parsed:
         answer = reply[start:end if end != -1 else len(reply)].strip()
         return Parsed(trace=trace, answer=answer, complete=end != -1)
 
-    # no answer block: the reply is a trace or nothing, never an answer
-    return Parsed(trace=trace, answer="", complete=False)
+    if THINK_OPEN in reply:
+        # a structured reply that never opened its answer block is unfinished
+        return Parsed(trace=trace, answer="", complete=False)
+
+    # plain convention: no markers anywhere, so the whole reply is the answer.
+    # It counts as complete when it ends on a sentence boundary, using the same
+    # rule longform applies to long answers.
+    text = reply.strip()
+    if not text:
+        return Parsed(trace="", answer="", complete=False)
+    return Parsed(trace="", answer=text, complete=text[-1] in TERMINALS)
 
 
 def answer_only(reply: str) -> str:
