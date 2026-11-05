@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from clock import make_budget  # noqa: E402
 from grammar_reward import score_hindi  # noqa: E402
 from model import HindiLM  # noqa: E402
-from tokenizer import CharTokenizer  # noqa: E402
+from tokenizer import CharTokenizer, language_tag  # noqa: E402
 from bpe_tokenizer import BPETokenizer, load_any  # noqa: E402
 
 
@@ -296,18 +296,6 @@ def main() -> None:
     report = model.parameters_report()
     print(f"{len(pairs)} chat pairs, vocab {tokenizer.size}, "
           f"parameters {report['parameters']:,}")
-
-    def language_tag(text: str) -> str:
-        dev = sum(1 for ch in text if "\u0900" <= ch <= "\u097f")
-        lat = sum(1 for ch in text if ch.isascii() and ch.isalpha())
-        if dev and dev >= lat:
-            return "<hi>"
-        if lat and dev == 0:
-            words = {w.lower() for w in text.replace("?", " ").split()}
-            markers = words & {"hai", "hain", "ka", "ki", "ke", "ko", "se", "me",
-                               "kya", "mujhe", "aap", "nahi", "kare", "karo"}
-            return "<mix>" if markers else "<en>"
-        return "<mix>"
 
     def encode_pair(pair: dict) -> tuple[list[int], int]:
         """Return the ids and the index where the answer starts.

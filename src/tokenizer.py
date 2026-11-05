@@ -68,3 +68,24 @@ class CharTokenizer:
     @property
     def size(self) -> int:
         return len(self.itos)
+
+
+def language_tag(text: str) -> str:
+    """Which language marker this text should carry.
+
+    The trainer applies this to the answer; the generator has only the question,
+    so it applies the same rule there. The first version of the generator hard
+    coded <hi>, which for an English answer primed the model with a tag it was
+    never trained to see in that position -- it then emitted the tag again
+    instead of an answer, and the reply decoded to the empty string.
+    """
+    dev = sum(1 for ch in text if "\u0900" <= ch <= "\u097f")
+    lat = sum(1 for ch in text if ch.isascii() and ch.isalpha())
+    if dev and dev >= lat:
+        return "<hi>"
+    if lat and dev == 0:
+        words = {w.lower() for w in text.replace("?", " ").split()}
+        markers = words & {"hai", "hain", "ka", "ki", "ke", "ko", "se", "me",
+                           "kya", "mujhe", "aap", "nahi", "kare", "karo"}
+        return "<mix>" if markers else "<en>"
+    return "<mix>"

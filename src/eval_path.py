@@ -26,7 +26,7 @@ from meaning_reward import score_against_reference  # noqa: E402
 from judge import judge  # noqa: E402
 from reasoning import parse  # noqa: E402
 from path_reward import score_path  # noqa: E402
-from tokenizer import CharTokenizer  # noqa: E402
+from tokenizer import CharTokenizer, language_tag  # noqa: E402
 
 
 def sample(model, tokenizer, cfg, prompt, temperature, top_k, max_new, seed):
@@ -34,7 +34,7 @@ def sample(model, tokenizer, cfg, prompt, temperature, top_k, max_new, seed):
     ids = ([tokenizer.stoi["<bos>"], tokenizer.stoi["<user>"]]
            + tokenizer.encode(prompt)
            + [tokenizer.stoi["<sep>"], tokenizer.stoi["<assistant>"],
-              tokenizer.stoi.get("<hi>", tokenizer.eos)])
+              tokenizer.stoi[language_tag(prompt)]])
     tokens = torch.tensor([ids])
     with torch.no_grad():
         for _ in range(max_new):

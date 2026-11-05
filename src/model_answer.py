@@ -39,19 +39,17 @@ def make_generate(checkpoint: Path, *, max_new: int = 200, temperature: float = 
     import torch
 
     from checkpoint import build_from_checkpoint
-    from bpe_tokenizer import load_any
+    from tokenizer import CharTokenizer
 
-    # The tokenizer is not stored inside the checkpoint, so it is read from the
-    # tokenizer.json written beside it. It must be loaded with load_any, not
-    # CharTokenizer: a BPE checkpoint has a 4096-entry embedding, and rebuilding
-    # the model with a CharTokenizer over the same file produced vocab 3 and
-    # failed with "size mismatch for embed.weight: [4096, 192] vs [3, 192]".
-    # load_any reads the kind field and returns whichever tokenizer was trained.
+    # the tokenizer is not stored inside the checkpoint, so it is read from the
+    # tokenizer.json written beside it; the model is rebuilt from the checkpoint's
+    # own saved args, so the architecture always matches what was trained
     tok_path = Path(checkpoint).parent / "tokenizer.json"
     if not tok_path.is_file():
         raise FileNotFoundError(f"no tokenizer.json beside {checkpoint}")
-    tokenizer = load_any(tok_path)
-    print(f"tokenizer: {type(tokenizer).__name__} vocab {tokenizer.size}")
+    data = json.loads(tok_path.read_text(encoding="utf-8"))
+    vocab = data["vocab"] if isinstance(data, dict) and "vocab" in data else data
+    tokenizer = CharTokenizer(vocab)
 
     model, cfg = build_from_checkpoint(Path(checkpoint), tokenizer)
     model.eval()
@@ -61,7 +59,7 @@ def make_generate(checkpoint: Path, *, max_new: int = 200, temperature: float = 
         ids = ([tokenizer.stoi["<bos>"], tokenizer.stoi["<user>"]]
                + tokenizer.encode(question)
                + [tokenizer.stoi["<sep>"], tokenizer.stoi["<assistant>"],
-                  tokenizer.stoi.get("<hi>", tokenizer.eos)])
+                  tokenizer.stoi[language_tag(question)]])
         # the question must leave room for the trace and the answer; if it does
         # not, there is no point sampling a reply that cannot finish
         if len(ids) + 8 >= seq_len:

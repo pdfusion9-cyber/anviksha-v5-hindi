@@ -41,6 +41,7 @@ import torch  # noqa: E402
 
 from checkpoint import build_from_checkpoint  # noqa: E402
 from bpe_tokenizer import load_any  # noqa: E402
+from tokenizer import language_tag  # noqa: E402
 
 
 def find_checkpoint(path: Path) -> Path:
@@ -68,7 +69,7 @@ def build_sequence(tokenizer, question: str, answer: str) -> tuple[list[int], in
     head = ([tokenizer.stoi["<bos>"], tokenizer.stoi["<user>"]]
             + tokenizer.encode(question)
             + [tokenizer.stoi["<sep>"], tokenizer.stoi["<assistant>"]]
-            + [tokenizer.stoi.get("<hi>", tokenizer.eos)])
+            + [tokenizer.stoi[language_tag(question)]])
     body = tokenizer.encode(answer) + [tokenizer.eos]
     return head + body, len(head)
 
@@ -104,7 +105,7 @@ def free_generate(model, tokenizer, cfg, question, max_new, temperature, top_k,
     head = ([tokenizer.stoi["<bos>"], tokenizer.stoi["<user>"]]
             + tokenizer.encode(question)
             + [tokenizer.stoi["<sep>"], tokenizer.stoi["<assistant>"],
-               tokenizer.stoi.get("<hi>", tokenizer.eos)])
+               tokenizer.stoi[language_tag(question)]])
     if len(head) + 8 >= seq_len:
         return ""
     torch.manual_seed(seed)
@@ -119,9 +120,18 @@ def free_generate(model, tokenizer, cfg, question, max_new, temperature, top_k,
             probs = torch.softmax(logits, dim=-1)
             nxt = torch.multinomial(probs, 1)
             tokens = torch.cat([tokens, nxt], dim=1)
-            if int(nxt) == tokenizer.eos:
+            tid = int(nxt)
+            if tid == tokenizer.eos:
                 break
-    return tokenizer.decode(tokens[0, len(head):].tolist())
+            # a special token other than <eos> in the answer position means the
+            # model has collapsed. Continuing would spend the whole budget
+            # repeating it and then decode to "", which reads as "said nothing".
+            if tid >= tokenizer.base if hasattr(tokenizer, "base") else tid >= 256:
+                break
+    ids = tokens[0, len(head):].tolist()
+    if ids and ids[-1] != tokenizer.eos and ids[-1] >= 256:
+        ids = ids[:-1]
+    return tokenizer.decode(ids)
 
 
 def main() -> None:
