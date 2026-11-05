@@ -39,17 +39,19 @@ def make_generate(checkpoint: Path, *, max_new: int = 200, temperature: float = 
     import torch
 
     from checkpoint import build_from_checkpoint
-    from tokenizer import CharTokenizer
+    from bpe_tokenizer import load_any
 
-    # the tokenizer is not stored inside the checkpoint, so it is read from the
-    # tokenizer.json written beside it; the model is rebuilt from the checkpoint's
-    # own saved args, so the architecture always matches what was trained
+    # The tokenizer is not stored inside the checkpoint, so it is read from the
+    # tokenizer.json written beside it. It must be loaded with load_any, not
+    # CharTokenizer: a BPE checkpoint has a 4096-entry embedding, and rebuilding
+    # the model with a CharTokenizer over the same file produced vocab 3 and
+    # failed with "size mismatch for embed.weight: [4096, 192] vs [3, 192]".
+    # load_any reads the kind field and returns whichever tokenizer was trained.
     tok_path = Path(checkpoint).parent / "tokenizer.json"
     if not tok_path.is_file():
         raise FileNotFoundError(f"no tokenizer.json beside {checkpoint}")
-    data = json.loads(tok_path.read_text(encoding="utf-8"))
-    vocab = data["vocab"] if isinstance(data, dict) and "vocab" in data else data
-    tokenizer = CharTokenizer(vocab)
+    tokenizer = load_any(tok_path)
+    print(f"tokenizer: {type(tokenizer).__name__} vocab {tokenizer.size}")
 
     model, cfg = build_from_checkpoint(Path(checkpoint), tokenizer)
     model.eval()
