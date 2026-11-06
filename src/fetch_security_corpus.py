@@ -49,8 +49,20 @@ def looks_security(text: str, min_hits: int = 3) -> bool:
 
 
 def main() -> None:
-    out = Path(sys.argv[sys.argv.index("--out") + 1]) if "--out" in sys.argv \
-        else Path("data/security_corpus")
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", type=Path, default=Path("data/security_corpus"))
+    ap.add_argument("--max-docs", type=int, default=400_000,
+                    help="how many HPLT documents to keep. The old cap of "
+                         "20,000 left every domain with a corpus smaller than "
+                         "one training segment could consume")
+    ap.add_argument("--doc-chars", type=int, default=4000,
+                    help="characters kept per document. 1,500 threw away the "
+                         "body of most security writing")
+    ap.add_argument("--stream-bytes", type=int, default=2_000_000_000,
+                    help="how much of the HPLT shard to read while filtering")
+    args = ap.parse_args()
+    out = args.out
     out.mkdir(parents=True, exist_ok=True)
     pairs: list[dict] = []
 
@@ -106,7 +118,7 @@ def main() -> None:
         target = [u for u in urls if re.search(rf"/{fh.BIN}_\d+\.jsonl\.zst$", u)]
         if target:
             kept = 0
-            for line, total in fh.stream_lines(target[0], 400_000_000):
+            for line, total in fh.stream_lines(target[0], args.stream_bytes):
                 try:
                     rec = json.loads(line)
                 except Exception:
@@ -114,9 +126,9 @@ def main() -> None:
                 text = rec.get("text") or ""
                 if len(text) > 300 and looks_security(text):
                     pairs.append({"user": "Summarise this security text.",
-                                  "assistant": text[:1500]})
+                                  "assistant": text[:args.doc_chars]})
                     kept += 1
-                if kept >= 20_000:
+                if kept >= args.max_docs:
                     break
             print(f"  kept {kept:,} security documents from HPLT")
     except Exception as e:

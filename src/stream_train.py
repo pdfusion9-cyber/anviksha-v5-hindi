@@ -48,8 +48,20 @@ def blocked(text: str, terms: list[str]) -> bool:
     return any(t in low for t in terms)
 
 
-def stream_documents(path: Path, limit: int | None = None):
-    """Yield documents one at a time. Never returns the file as a string."""
+def stream_documents(path: Path, limit: int | None = None, epochs: int = 1):
+    """Yield documents one at a time. Never returns the file as a string.
+
+    epochs > 1 repeats the corpus, which is what a token budget larger than the
+    corpus requires. The repetition is not free: past a few passes the model
+    memorises rather than generalises, so the caller prints how many passes the
+    budget implies before starting.
+    """
+    for _ in range(max(1, epochs)):
+        yield from _stream_once(path, limit)
+
+
+def _stream_once(path: Path, limit: int | None = None):
+    """One pass over the file."""
     if path.suffix == ".jsonl":
         with path.open(encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
@@ -188,6 +200,10 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=1000000)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--clock-budget-minutes", type=float, default=120.0)
+    ap.add_argument("--epochs", type=int, default=1,
+                    help="how many times to read the corpus. Raise it when the "
+                         "token budget is larger than the corpus, which is the "
+                         "usual case for a long run over a small domain")
     ap.add_argument("--resume", action="store_true",
                     help="load optimiser state and step from the checkpoint so "
                          "a session that ended can continue rather than restart")
@@ -300,7 +316,13 @@ def main() -> None:
                 print("checkpoint carries no optimiser state")
         else:
             print(f"--resume given but {ck} does not exist; starting fresh")
-    stream = WindowStream(stream_documents(args.text, limit=args.max_docs or None),
+    epochs = max(1, int(getattr(args, "epochs", 1)))
+    if epochs > 1:
+        print(f"corpus repeated {epochs} times: a budget larger than the "
+              f"corpus needs repetition, and repetition past a few passes "
+              f"teaches the text rather than the pattern")
+    stream = WindowStream(stream_documents(args.text, limit=args.max_docs or None,
+                                           epochs=epochs),
                           tokenizer, args.seq_len, terms,
                           buffer_windows=args.buffer_windows)
     replay_stream = None

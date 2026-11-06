@@ -63,7 +63,8 @@ jobs:
 
       - name: Build the corpus and the shared tokenizer
         run: |
-          python src/fetch_security_corpus.py --out data/security_corpus
+          python src/fetch_security_corpus.py --out data/security_corpus \
+            --max-docs 400000 --doc-chars 4000 --stream-bytes 2000000000
           test -s data/security_corpus/corpus.jsonl || { echo "empty corpus"; exit 1; }
           python src/split_security.py data/security_corpus/corpus.jsonl
           python - <<'PY'
@@ -135,6 +136,7 @@ jobs:
             --dtype fp32 --threads 4 \
             --clock-budget-minutes ${{ inputs.minutes }} \
             --content-filter \
+            --epochs 12 \
             --checkpoint-every 25
 
       - name: Did this segment reach the target
