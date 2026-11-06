@@ -342,7 +342,15 @@ def main() -> None:
              "seconds": round(time.time() - started, 1)}
     save(model, tokenizer, args.out / "chat.pt", args, final)
     (args.out / "stream_report.json").write_text(json.dumps(final, indent=2))
-    print(f"\nfinished {step - start_step:,} steps in {time.time()-started:.0f}s")
+    trained = step - start_step
+    print(f"\nfinished {trained:,} steps in {time.time()-started:.0f}s")
+    if trained == 0:
+        # A run that read no tokens and trained no steps exited zero and was
+        # reported as a success. That is the fault this whole audit keeps
+        # finding: silence read as success. It is an error now.
+        print("ERROR: no steps were trained. The corpus was empty or unreadable.",
+              flush=True)
+        raise SystemExit(3)
     print(f"docs {stream.docs_read:,}, tokens {stream.tokens_seen:,}, "
           f"non-finite steps skipped {nan_skipped}")
     print(f"expert usage: {final['expert_usage']}")

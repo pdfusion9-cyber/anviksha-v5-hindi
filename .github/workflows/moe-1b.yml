@@ -87,9 +87,17 @@ jobs:
       - name: Get the corpus
         run: |
           python src/fetch_hplt.py --out data/hplt --lang ${{ inputs.lang }} \
-            --max-bytes 4705746944 --max-docs 150000 || true
-          ls -la data/hplt/ 2>/dev/null | head
-          test -f data/hplt/hindi_corpus.txt || { echo "no corpus; aborting"; exit 1; }
+            --max-bytes 4705746944 --max-docs 150000
+          ls -la data/hplt/
+          # A fetch that keeps zero documents used to pass this step, because
+          # the file existed and was empty. Size is the thing that matters.
+          SIZE=$(stat -c%s data/hplt/hindi_corpus.txt 2>/dev/null || echo 0)
+          echo "corpus bytes: $SIZE"
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "corpus is only $SIZE bytes; refusing to train on it"
+            cat data/hplt/fetch_stats.json 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Stream-train the mixture of experts
         run: |

@@ -180,7 +180,6 @@ def main() -> None:
                 if d < len(text) * args.min_script:
                     reasons["not_target_script"] += 1
                     continue
-                continue
 
             exact = hashlib.sha256(text[:2000].encode("utf-8")).hexdigest()[:16]
             if exact in seen_exact:
