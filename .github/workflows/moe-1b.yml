@@ -24,8 +24,8 @@ on:
         required: true
         default: "moe1b_a"
       tokenizer-from:
-        description: "reuse this run's tokenizer (required for merging)"
-        required: true
+        description: "reuse this run's tokenizer (required for merging). Leave empty for the first run."
+        required: false
         default: ""
       minutes:
         description: "clock budget in minutes"
