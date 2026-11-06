@@ -11,7 +11,7 @@ on:
       - "src/kavach_sandbox.py"
       - "src/pii_india.py"
       - "tests/test_kavach_policy.py"
-      - "tests/test_security_agent.py"
+      - "src/test_security_agent.py"
       - ".github/workflows/kavach-quality.yml"
   workflow_dispatch:
 
@@ -38,4 +38,4 @@ jobs:
           python -m py_compile src/kavach.py src/security_agent.py src/capability_policy.py src/kavach_sandbox.py src/pii_india.py
       - name: Run bilingual policy and adversarial regression tests
         run: |
-          pytest -q tests/test_kavach_policy.py tests/test_security_agent.py
+          pytest -q tests/test_kavach_policy.py src/test_security_agent.py
