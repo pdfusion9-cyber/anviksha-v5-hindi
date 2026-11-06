@@ -182,6 +182,11 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=1000000)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--clock-budget-minutes", type=float, default=120.0)
+    ap.add_argument("--tokens", type=float, default=0.0,
+                    help="token budget. The run streams until this many tokens "
+                         "have been seen, and reports what fraction of the "
+                         "budget it reached, so a shortfall is visible rather "
+                         "than implied by a clock that ran out.")
     ap.add_argument("--target-steps", type=int, default=0)
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--checkpoint-every", type=int, default=200)
@@ -363,6 +368,13 @@ def main() -> None:
         print("ERROR: no steps were trained. The corpus was empty or unreadable.",
               flush=True)
         raise SystemExit(3)
+    if args.tokens:
+        frac = stream.tokens_seen / max(args.tokens, 1)
+        print(f"budget: {stream.tokens_seen:,} of {args.tokens:,.0f} tokens "
+              f"({frac*100:.4f}%)")
+        if frac < 0.99:
+            print(f"  the run stopped {1-frac:.4%} short of the budget it was "
+                  f"given; the clock or the corpus ran out first")
     print(f"docs {stream.docs_read:,}, tokens {stream.tokens_seen:,}, "
           f"non-finite steps skipped {nan_skipped}")
     print(f"expert usage: {final['expert_usage']}")
