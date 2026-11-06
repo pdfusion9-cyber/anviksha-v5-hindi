@@ -40,6 +40,11 @@ def make_generate(checkpoint: Path, *, max_new: int = 200, temperature: float = 
 
     from checkpoint import build_from_checkpoint
     from bpe_tokenizer import load_any
+    # language_tag lives in tokenizer.py and is used a few lines down to pick the
+    # language marker. It was called without being imported, so every evaluation
+    # died with NameError the moment it tried to generate -- the tokenizer fix
+    # worked and then the very next line failed.
+    from tokenizer import language_tag
 
     # The tokenizer is not stored inside the checkpoint, so it is read from the
     # tokenizer.json beside it -- with load_any, which reads the kind field. This
