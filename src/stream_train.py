@@ -147,10 +147,16 @@ def build_model(vocab: int, args) -> MoELM:
     return MoELM(cfg)
 
 
-def save(model, tokenizer, path: Path, args, extra: dict | None = None):
+def save(model, tokenizer, path: Path, args, extra: dict | None = None,
+         optimiser=None, step: int = 0):
     path.parent.mkdir(parents=True, exist_ok=True)
     report = model.parameters_report()
     torch.save({"model": model.state_dict(),
+                # the optimiser state, because a session that ends at twelve
+                # hours and restarts without it throws away every moment AdamW
+                # had accumulated
+                "optimiser": optimiser.state_dict() if optimiser else None,
+                "step": step,
                 "config": model.cfg.__dict__,
                 "args": {k: (str(v) if isinstance(v, Path) else v)
                          for k, v in vars(args).items()},
@@ -182,6 +188,9 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=1000000)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--clock-budget-minutes", type=float, default=120.0)
+    ap.add_argument("--resume", action="store_true",
+                    help="load optimiser state and step from the checkpoint so "
+                         "a session that ended can continue rather than restart")
     ap.add_argument("--tokens", type=float, default=0.0,
                     help="token budget. The run streams until this many tokens "
                          "have been seen, and reports what fraction of the "
@@ -272,6 +281,25 @@ def main() -> None:
 
     optimiser = torch.optim.AdamW(model.parameters(), lr=args.lr,
                                   betas=(0.9, 0.95), weight_decay=0.1)
+    # Resume the optimiser too. A free GPU session ends at twelve hours; without
+    # this the moments restart every session and the loss curve hides it.
+    if args.resume:
+        ck = args.out / "chat.pt"
+        if ck.is_file():
+            prev = torch.load(ck, weights_only=False)
+            if prev.get("optimiser"):
+                try:
+                    optimiser.load_state_dict(prev["optimiser"])
+                    start_step = max(start_step, int(prev.get("step", 0)))
+                    print(f"resumed optimiser and step {start_step:,} from {ck}")
+                except Exception as e:
+                    print(f"optimiser state did not load ({type(e).__name__}); "
+                          f"continuing with fresh moments, which costs training "
+                          f"time and is worth knowing about")
+            else:
+                print("checkpoint carries no optimiser state")
+        else:
+            print(f"--resume given but {ck} does not exist; starting fresh")
     stream = WindowStream(stream_documents(args.text, limit=args.max_docs or None),
                           tokenizer, args.seq_len, terms,
                           buffer_windows=args.buffer_windows)
@@ -348,7 +376,8 @@ def main() -> None:
                  {"step": step, "docs_read": stream.docs_read,
                   "tokens_seen": stream.tokens_seen,
                   "nan_skipped": nan_skipped,
-                  "expert_usage": model.expert_usage()})
+                  "expert_usage": model.expert_usage()},
+                 optimiser=optimiser, step=step)
 
     final = {"step": step, "docs_read": stream.docs_read,
              "tokens_seen": stream.tokens_seen, "docs_dropped": stream.docs_dropped,
@@ -357,7 +386,8 @@ def main() -> None:
              "parameters": report["total_parameters"],
              "active_parameters": report["active_parameters"],
              "seconds": round(time.time() - started, 1)}
-    save(model, tokenizer, args.out / "chat.pt", args, final)
+    save(model, tokenizer, args.out / "chat.pt", args, final,
+         optimiser=optimiser, step=step)
     (args.out / "stream_report.json").write_text(json.dumps(final, indent=2))
     trained = step - start_step
     print(f"\nfinished {trained:,} steps in {time.time()-started:.0f}s")
