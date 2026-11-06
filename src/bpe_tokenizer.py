@@ -85,6 +85,20 @@ class BPETokenizer:
             plain.append(i)
         return self.bpe.decode([i for i in plain if isinstance(i, int)])
 
+    def token_bytes(self, token_id: int) -> bytes:
+        """Expand one non-special BPE token to its exact UTF-8 byte payload.
+
+        This is exposed for incremental UTF-8-constrained decoding. A byte-level
+        model can emit a multi-byte Devanagari character across several tokens;
+        callers must validate the byte stream, not decode each token separately.
+        """
+        token_id = int(token_id)
+        if token_id < 0 or token_id >= self.base:
+            raise ValueError(f"token id {token_id} is not a byte/BPE token")
+        raw: list[int] = []
+        self.bpe._expand(token_id, raw)
+        return bytes(raw)
+
     def save(self, path: Path) -> None:
         Path(path).write_text(json.dumps({
             "kind": "bpe",
