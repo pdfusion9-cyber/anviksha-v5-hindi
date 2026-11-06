@@ -85,22 +85,24 @@ jobs:
           print(f"tokenizer: {tok.size} entries, learned on both halves")
           PY
 
-      - name: Write the initial weights both halves start from
+      - name: Record the seed both halves build their initial weights from
         run: |
+          # A 1.1 GB init checkpoint is 2 GB with the corpus and takes minutes to
+          # move between jobs. The same weights come from the same seed in a
+          # second, and a seed cannot be truncated in transit.
           python - <<'PY'
-          import sys, torch
+          import json, sys
           sys.path.insert(0, "src")
           from pathlib import Path
-          from moe_model import MoEConfig, MoELM
-          torch.manual_seed(20261106)     # one seed, so the shared parts begin equal
+          from moe_model import MoEConfig
           cfg = MoEConfig(vocab=8192, dim=512, layers=8, heads=8, seq_len=256,
                           experts=32, top_k=2, ffn_mult=4)
-          m = MoELM(cfg)
           c = cfg.counts()
           Path("shared").mkdir(exist_ok=True)
-          torch.save({"model": m.state_dict(), "config": cfg.__dict__,
-                      "args": {"stage": "init", "seed": 20261106}},
-                     "shared/init.pt")
+          Path("shared/seed.json").write_text(json.dumps({
+              "seed": 20261106, "config": cfg.__dict__,
+              "note": "both halves build their initial weights from this seed, "
+                      "so the shared parts begin identical"}))
           print(f"init: {c['total']:,} parameters, seed 20261106")
           print(f"two of these transfer to {1_086_473_216:,}")
           PY
@@ -109,7 +111,8 @@ jobs:
         with:
           name: shared-setup
           path: |
-            shared/
+            shared/seed.json
+            shared/tokenizer.json
             data/security/half_a_defend.txt
             data/security/half_b_failures.txt
             data/security/split_report.json
@@ -143,6 +146,22 @@ jobs:
           HALF="${{ matrix.half }}"
           if [ "$HALF" = "a" ]; then CORPUS=data/security/half_a_defend.txt; else CORPUS=data/security/half_b_failures.txt; fi
           echo "half $HALF on $(wc -c < $CORPUS) characters"
+          echo "tokenizer: $(ls -la shared/tokenizer.json 2>/dev/null || echo MISSING)"
+          test -f shared/tokenizer.json || { echo "the shared tokenizer did not arrive; the halves cannot be merged"; exit 1; }
+          python - <<'PY'
+          import json, sys, torch
+          sys.path.insert(0, "src")
+          from pathlib import Path
+          from moe_model import MoEConfig, MoELM
+          setup = json.loads(Path("shared/seed.json").read_text())
+          torch.manual_seed(setup["seed"])
+          cfg = MoEConfig(**setup["config"])
+          Path("shared").mkdir(exist_ok=True)
+          torch.save({"model": MoELM(cfg).state_dict(), "config": cfg.__dict__,
+                      "args": {"stage": "init", "seed": setup["seed"]}},
+                     "shared/init.pt")
+          print(f"initial weights built from seed {setup['seed']}")
+          PY
           python src/stream_train.py \
             --text "$CORPUS" \
             --out "runs/half_$HALF" \
