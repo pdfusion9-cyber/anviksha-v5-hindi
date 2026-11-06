@@ -73,6 +73,9 @@ PURPOSES: dict[str, set[str]] = {
     "order_assistant": {"answer_question", "read_document", "call_tool"},
     "knowledge_writer": {"answer_question", "read_document", "write_graph"},
     "code_helper": {"answer_question", "read_document"},
+    # KAVACH Model 1 may explain defensive security concepts and inspect
+    # supplied material, but receives no execution, network or tool grant.
+    "cybersecurity_assistant": {"answer_question", "read_document"},
 }
 
 # Capabilities that are never granted, whatever purpose is declared. Listing them
@@ -132,9 +135,15 @@ class CapabilityPolicy:
         # A question about a capability is not a request for it. "What does
         # eval() do?" needs an answer, not code execution, and treating it as
         # the latter blocks ordinary engineering work.
-        asking = bool(re.match(
-            r"^\s*(what|how|why|where|when|which|who|is|are|does|do|can|could|"
-            r"should|explain|describe|tell me)", low)) and low.rstrip().endswith("?")
+        has_question_mark = low.rstrip().endswith(("?", "？"))
+        english_question = bool(re.match(
+            r"^\\s*(what|how|why|where|when|which|who|is|are|does|do|can|could|"
+            r"should|explain|describe|tell me)\\b", low))
+        indic_question = bool(re.search(
+            r"(क्या|कैसे|क्यों|कहाँ|कब|कौन|किस|किसे|बताइए|समझाइए|"
+            r"\\bkya\\b|\\bkaise\\b|\\bkyun\\b|\\bkahan\\b|\\bkab\\b|\\bkaun\\b)",
+            low))
+        asking = has_question_mark and (english_question or indic_question)
         for cap, pattern in self.NEED_MARKERS.items():
             if asking and cap in ("execute_code", "read_secret", "network_out"):
                 continue
