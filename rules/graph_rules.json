@@ -1,0 +1,135 @@
+{
+  "version": 2,
+  "principle": "A rule that names specific words is a rule that will miss the next word. Every rule here is stated as a measurement, so it applies to any corpus, any domain and any language the parser handles, including knowledge the model does not have yet. The recurring failure in this project was hand-written blocklists that kept missing the obvious case: 'monitoring' was listed and 'monitor' was not, 'approach' was listed and 'this approach' was not. Nothing below depends on a list of words.",
+  "entity_rules": [
+    {
+      "id": "E1",
+      "name": "an entity is a noun phrase",
+      "test": "pos_allowed",
+      "allow": [
+        "NOUN",
+        "PROPN"
+      ],
+      "why": "A verb, adjective, adverb or pronoun cannot be a thing a relation holds between. 'monitor causes proactive identification' passed the old rules because 'monitor' was not on a list; here it fails because 'monitor' is a VERB."
+    },
+    {
+      "id": "E2",
+      "name": "an entity is not a closed-class word",
+      "test": "not_closed_class",
+      "reject_pos": [
+        "PRON",
+        "DET",
+        "CCONJ",
+        "SCONJ",
+        "ADP",
+        "AUX",
+        "PART",
+        "INTJ",
+        "NUM",
+        "PUNCT",
+        "SYM",
+        "X"
+      ],
+      "reject_dep": [
+        "det",
+        "aux",
+        "auxpass",
+        "mark",
+        "case",
+        "cc",
+        "punct"
+      ],
+      "why": "Pronouns and determiners refer to something else in the sentence. They are never knowledge on their own."
+    },
+    {
+      "id": "E3",
+      "name": "an entity is not the relation's own verb",
+      "test": "not_the_verb",
+      "why": "The head noun of the relation cannot also be an endpoint of it. 'detection detects anomalies' says nothing."
+    },
+    {
+      "id": "E4",
+      "name": "an entity carries information about this corpus",
+      "test": "informativeness",
+      "measure": "inverse_document_frequency",
+      "min_idf": 1.2,
+      "why": "This replaces every blocklist. A term that appears in most documents distinguishes nothing, whatever the term is. 'implementation' and 'approach' have low IDF in security prose because they are everywhere; 'MITRE' and 'YARA' have high IDF because they are not. The threshold does the work that a list of banned words was doing badly, and it does it for domains nobody has written a list for yet."
+    },
+    {
+      "id": "E5",
+      "name": "an entity is specific enough to name something",
+      "test": "specificity",
+      "min_chars": 3,
+      "min_tokens": 1,
+      "max_tokens": 6,
+      "why": "Single characters are noise; a clause is not an entity."
+    },
+    {
+      "id": "E6",
+      "name": "a word this corpus uses as a verb is not an entity",
+      "test": "verb_share",
+      "max_verb_share": 0.5,
+      "why": "The parser tagged the bare subject monitor as PROPN, so a part-of-speech check alone let it through. What the corpus says about the word is a measurement, and it cannot miss a verb the way a list did."
+    }
+  ],
+  "relation_rules": [
+    {
+      "id": "R1",
+      "name": "both endpoints must be entities",
+      "test": "endpoints_valid",
+      "why": "If either end fails the entity rules the relation is not about anything."
+    },
+    {
+      "id": "R2",
+      "name": "the endpoints must differ",
+      "test": "endpoints_distinct",
+      "why": "A relation from a thing to itself is a parse artefact."
+    },
+    {
+      "id": "R3",
+      "name": "the relation must be asserted more than once",
+      "test": "support_at_least",
+      "min_support": 3,
+      "why": "One sentence can be a misparse. Three independent sentences are a claim the corpus makes."
+    },
+    {
+      "id": "R4",
+      "name": "frequency alone is not evidence",
+      "test": "not_merely_frequent",
+      "max_document_share": 0.15,
+      "why": "The highest-support relation on the real corpus was 'implementation requires careful consideration' at 16. A pair that appears in a large fraction of all documents is describing the writing style, not the subject. This is the same measurement as E4 applied to the pair rather than the term."
+    },
+    {
+      "id": "R5",
+      "name": "a specific relation outranks the general one it implies",
+      "test": "prefer_specific",
+      "why": "If A--rel-->B and A--rel-->B-and-C both hold, keep the one that names more. The general one adds nothing and costs a node."
+    },
+    {
+      "id": "R6",
+      "name": "the relation must not be a paraphrase of its own endpoints",
+      "test": "not_tautological",
+      "why": "'detection detects detection' and 'security requires security' carry no information. Measured by token overlap between the endpoints and the relation label."
+    }
+  ],
+  "application": {
+    "where": "every path that can add an edge to the graph",
+    "sources": [
+      "automatic extraction from a corpus",
+      "a user prompt that states a fact",
+      "a model answer that is being promoted into the graph",
+      "a hand-written relation"
+    ],
+    "note": "A hand-written relation is checked too. The rules are not a filter for machine output; they are the definition of what counts as knowledge. If a rule rejects something a person wrote, either the rule is wrong or the fact is not a relation.",
+    "unknown_knowledge": "Nothing here depends on the model already knowing the terms. E4 measures informativeness against the corpus in front of it, so a domain the model has never seen is handled by the same rule that handles security."
+  },
+  "thresholds": {
+    "min_idf": 1.2,
+    "min_support": 3,
+    "max_document_share": 0.15,
+    "min_chars": 3,
+    "max_tokens": 6,
+    "note": "Each is a measurement, not a word list. They are in one place so a corpus with different statistics can move them without editing code.",
+    "max_verb_share": 0.5
+  }
+}
