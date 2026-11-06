@@ -71,11 +71,19 @@ def check_compatible(a: dict, b: dict) -> list[str]:
     return problems
 
 
-def expert_count(state: dict) -> int:
+def expert_count(state: dict, layer: int = 0) -> int:
+    """Experts in one layer. Counted per layer because a fold can leave layers
+    disagreeing, and assuming they match is what produced a KeyError on the
+    second fold."""
     n = 0
-    while f"blocks.0.moe.experts.{n}.w1.weight" in state:
+    while f"blocks.{layer}.moe.experts.{n}.w1.weight" in state:
         n += 1
     return n
+
+
+def expert_counts(state: dict) -> list[int]:
+    layers = layer_count(state)
+    return [expert_count(state, l) for l in range(layers)]
 
 
 def layer_count(state: dict) -> int:
@@ -106,6 +114,10 @@ def merge(base_path: Path, incoming_path: Path, out_path: Path,
             "mean the same string in both models")
 
     na, nb = expert_count(sa), expert_count(sb)
+    counts_a, counts_b = expert_counts(sa), expert_counts(sb)
+    if len(set(counts_a)) > 1 or len(set(counts_b)) > 1:
+        print(f"  note: layers disagree on expert count -- base {counts_a}, "
+              f"incoming {counts_b}; using each layer's own figure")
     layers = layer_count(sa)
     if layers != layer_count(sb):
         raise SystemExit(f"layer count differs: {layers} vs {layer_count(sb)}")
@@ -133,21 +145,26 @@ def merge(base_path: Path, incoming_path: Path, out_path: Path,
     total_dupes = 0
 
     for layer in range(layers):
+        # per-layer counts, not the layer-0 figure for all of them
+        na_l = expert_count(sa, layer)
+        nb_l = expert_count(sb, layer)
         # similarity of every incoming expert against every base expert
-        base_flat = torch.stack([flatten_expert(sa, layer, i) for i in range(na)])
-        inc_flat = torch.stack([flatten_expert(sb, layer, j) for j in range(nb)])
+        base_flat = torch.stack([flatten_expert(sa, layer, i)
+                                 for i in range(na_l)])
+        inc_flat = torch.stack([flatten_expert(sb, layer, j)
+                                for j in range(nb_l)])
         base_n = F.normalize(base_flat, dim=1)
         inc_n = F.normalize(inc_flat, dim=1)
         sim = inc_n @ base_n.T                       # [nb, na]
 
         best_sim, best_idx = sim.max(dim=1)
-        keep = [j for j in range(nb) if float(best_sim[j]) < threshold]
+        keep = [j for j in range(nb_l) if float(best_sim[j]) < threshold]
         keep.sort(key=lambda j: float(best_sim[j]))   # least similar first
         if max_new is not None:
             keep = keep[:max_new]
 
         added = 0
-        next_id = na
+        next_id = na_l
         for j in keep:
             for w in ("w1.weight", "w2.weight"):
                 src = sb[f"blocks.{layer}.moe.experts.{j}.{w}"]
@@ -167,7 +184,7 @@ def merge(base_path: Path, incoming_path: Path, out_path: Path,
         else:
             merged[router_key] = old_router.clone()
 
-        dupes = nb - len(keep)
+        dupes = nb_l - len(keep)
         # count experts, not expert-layer pairs: the first layer's figure is the
         # number of experts added, and every layer adds the same ones
         if layer == 0:
