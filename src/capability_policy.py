@@ -137,11 +137,11 @@ class CapabilityPolicy:
         # the latter blocks ordinary engineering work.
         has_question_mark = low.rstrip().endswith(("?", "？"))
         english_question = bool(re.match(
-            r"^\\s*(what|how|why|where|when|which|who|is|are|does|do|can|could|"
-            r"should|explain|describe|tell me)\\b", low))
+            r"^\s*(what|how|why|where|when|which|who|is|are|does|do|can|could|"
+            r"should|explain|describe|tell me)\b", low))
         indic_question = bool(re.search(
             r"(क्या|कैसे|क्यों|कहाँ|कब|कौन|किस|किसे|बताइए|समझाइए|"
-            r"\\bkya\\b|\\bkaise\\b|\\bkyun\\b|\\bkahan\\b|\\bkab\\b|\\bkaun\\b)",
+            r"\bkya\b|\bkaise\b|\bkyun\b|\bkahan\b|\bkab\b|\bkaun\b)",
             low))
         asking = has_question_mark and (english_question or indic_question)
         for cap, pattern in self.NEED_MARKERS.items():
