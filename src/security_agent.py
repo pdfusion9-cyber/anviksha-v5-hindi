@@ -428,6 +428,7 @@ class SecurityAgent:
                               "by_detector": {}, "history": []}
         self.quarantined: set[str] = set()
         self.quarantine_after = quarantine_after
+        self.learned: list[dict] = []
         self.fired: dict[str, int] = {}
 
     # ---- one request, decided without asking anyone --------------------
@@ -465,6 +466,10 @@ class SecurityAgent:
                     self.quarantined.add(detector.name)
                     trace.append(f"{detector.name} quarantined: fired on "
                                  f"{self.fired[detector.name]} requests")
+
+        for f in self.check_learned(normalised):
+            findings.append(f)
+            trace.append(str(f))
 
         decision = self._weigh(findings, text, ctx, trace)
         self._verify(decision, findings, trace)
@@ -586,8 +591,35 @@ class SecurityAgent:
                 "writes_graph": bool(ctx.get("writes_graph")),
             }) + "\n")
 
+    # ---- rules learned at run time ------------------------------------
+    def add_rule(self, rule: dict) -> bool:
+        """Add a rule the adversarial loop proposed, if it is safe to add."""
+        import re as _re
+        try:
+            compiled = _re.compile(rule["pattern"], _re.I)
+        except Exception:
+            return False
+        if any(r["id"] == rule["id"] for r in self.learned):
+            return False
+        self.learned.append({**rule, "_compiled": compiled})
+        return True
+
+    def remove_rule(self, rule_id: str) -> None:
+        self.learned = [r for r in self.learned if r["id"] != rule_id]
+
+    def check_learned(self, text: str) -> list[Finding]:
+        out = []
+        for r in self.learned:
+            m = r["_compiled"].search(text)
+            if m:
+                out.append(Finding("learned", r.get("severity", "high"),
+                                   r.get("reason", "learned rule matched"),
+                                   m.group(0)[:60]))
+        return out
+
     def report(self) -> dict:
         return {"seen": self.session["seen"],
                 "blocked": self.session["blocked"],
+                "learned_rules": len(self.learned),
                 "by_detector": self.session["by_detector"],
                 "quarantined": sorted(self.quarantined)}
