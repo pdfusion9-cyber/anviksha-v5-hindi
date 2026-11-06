@@ -128,10 +128,9 @@ jobs:
             --experts ${{ inputs.experts }} --top-k 2 --ffn-mult 4 \
             --seq-len 256 --batch ${{ inputs.batch }} \
             --dtype bf16 --threads 4 \
-            --minutes ${{ inputs.minutes }} \
+            --clock-budget-minutes ${{ inputs.minutes }} \
             --content-filter \
-            --checkpoint-every 20 \
-            --report-every 10
+            --checkpoint-every 20
 
       - name: Report
         if: always()
