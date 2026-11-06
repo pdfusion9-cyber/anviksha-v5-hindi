@@ -60,6 +60,18 @@ class MoEConfig:
     def ffn(self) -> int:
         return self.dim * self.ffn_mult
 
+    def footprint_gb(self, dtype_bytes: int = 4) -> float:
+        """What a training step actually allocates.
+
+        Weights, gradients and two AdamW states for every parameter -- not just
+        the active ones. With a batch of four at 256 tokens, 1024 tokens are
+        routed per step and with 64 experts every expert receives some, so every
+        expert gets a gradient and an optimiser state. Counting only the active
+        fraction is what made a 1B fp32 model look like it fitted in 0.7 GB when
+        it needs 17.3 GB, and the first run was killed by the runner for it.
+        """
+        return self.counts()["total"] * dtype_bytes * 4 / 1e9
+
     def counts(self) -> dict:
         attn = 4 * self.dim * self.dim
         per_expert = 2 * self.dim * self.ffn

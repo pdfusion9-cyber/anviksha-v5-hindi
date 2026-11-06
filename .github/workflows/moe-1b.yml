@@ -15,6 +15,18 @@ name: moe-1b
 on:
   workflow_dispatch:
     inputs:
+      lang:
+        description: "HPLT language: hin_Deva or eng_Latn"
+        required: true
+        default: "hin_Deva"
+      run-name:
+        description: "output directory under runs/"
+        required: true
+        default: "moe1b_a"
+      tokenizer-from:
+        description: "reuse this run's tokenizer (required for merging)"
+        required: true
+        default: ""
       minutes:
         description: "clock budget in minutes"
         required: true
@@ -39,6 +51,10 @@ on:
         description: "batch size"
         required: true
         default: "4"
+      dtype:
+        description: "fp32 or bf16"
+        required: true
+        default: "bf16"
 
 jobs:
   train:
@@ -70,7 +86,8 @@ jobs:
 
       - name: Get the corpus
         run: |
-          python src/fetch_hplt.py --out data/hplt --max-bytes 4705746944 --max-docs 150000 || true
+          python src/fetch_hplt.py --out data/hplt --lang ${{ inputs.lang }} \
+            --max-bytes 4705746944 --max-docs 150000 || true
           ls -la data/hplt/ 2>/dev/null | head
           test -f data/hplt/hindi_corpus.txt || { echo "no corpus; aborting"; exit 1; }
 
@@ -78,7 +95,8 @@ jobs:
         run: |
           python src/stream_train.py \
             --text data/hplt/hindi_corpus.txt \
-            --out runs/moe1b \
+            --out runs/${{ inputs.run-name }} \
+            ${{ inputs.tokenizer-from != '' && format('--tokenizer-from {0}', inputs.tokenizer-from) || '' }} \
             --vocab ${{ inputs.vocab }} \
             --dim ${{ inputs.dim }} \
             --layers ${{ inputs.layers }} \
@@ -95,20 +113,21 @@ jobs:
             --blocklist rules/content_blocklist.json \
             --clock-budget-minutes ${{ inputs.minutes }} \
             --checkpoint-every 500 \
-            --buffer-windows 512
+            --buffer-windows 512 \
+            --dtype ${{ inputs.dtype }}
 
       - name: Report
         if: always()
         run: |
-          cat runs/moe1b/stream_report.json 2>/dev/null || echo "no report written"
+          cat runs/${{ inputs.run-name }}/stream_report.json 2>/dev/null || echo "no report written"
 
       - name: Upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moe-1b
+          name: ${{ inputs.run-name }}
           path: |
-            runs/moe1b/chat.pt
-            runs/moe1b/tokenizer.json
-            runs/moe1b/stream_report.json
+            runs/${{ inputs.run-name }}/chat.pt
+            runs/${{ inputs.run-name }}/tokenizer.json
+            runs/${{ inputs.run-name }}/stream_report.json
           if-no-files-found: warn

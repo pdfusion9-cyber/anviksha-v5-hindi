@@ -159,6 +159,10 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=Path("runs/moe"))
     ap.add_argument("--init-from", type=Path, default=None)
     ap.add_argument("--tokenizer", default="bpe")
+    ap.add_argument("--tokenizer-from", type=Path, default=None,
+                   help="copy the tokenizer from this directory. Two checkpoints "
+                        "can only be merged if their embedding rows mean the same "
+                        "thing, which requires the identical tokenizer.")
     ap.add_argument("--vocab", type=int, default=8192)
     ap.add_argument("--dim", type=int, default=512)
     ap.add_argument("--layers", type=int, default=8)
@@ -181,6 +185,9 @@ def main() -> None:
     ap.add_argument("--max-docs", type=int, default=0)
     ap.add_argument("--replay-text", type=Path, default=None)
     ap.add_argument("--replay-fraction", type=float, default=0.0)
+    ap.add_argument("--dtype", default="fp32", choices=["fp32", "bf16"],
+                   help="bf16 halves weights, gradients and optimiser states. "
+                        "A 1B fp32 model needs 17.3 GB and the runner has 16.")
     args = ap.parse_args()
 
     torch.set_num_threads(args.threads)
@@ -193,6 +200,13 @@ def main() -> None:
     # tokenizer first, so the model is built at the right vocabulary size
     from bpe_tokenizer import BPETokenizer, load_any
     tok_path = args.out / "tokenizer.json"
+    if args.tokenizer_from is not None:
+        src = args.tokenizer_from / "tokenizer.json"
+        if not src.is_file():
+            raise SystemExit(f"no tokenizer.json in {args.tokenizer_from}")
+        args.out.mkdir(parents=True, exist_ok=True)
+        tok_path.write_bytes(src.read_bytes())
+        print(f"tokenizer: copied from {src} so this run can be merged with it")
     if tok_path.is_file():
         tokenizer = load_any(tok_path)
         print(f"tokenizer: loaded {tokenizer.size} entries from {tok_path}")
@@ -212,12 +226,25 @@ def main() -> None:
         print(f"tokenizer: trained {tokenizer.size} entries on {n:,} characters")
 
     model = build_model(tokenizer.size, args)
+    if args.dtype == "bf16":
+        model = model.to(torch.bfloat16)
+        print("dtype: bfloat16 (parameters, gradients and optimiser states)")
     report = model.parameters_report()
     print(f"model: {report['total_parameters']:,} total parameters, "
           f"{report['active_parameters']:,} active per token "
           f"({report['active_fraction']*100:.1f}%)")
     print(f"       {args.experts} experts, top {args.top_k}, dim {args.dim}, "
           f"{args.layers} layers, window {args.seq_len}")
+    bytes_per = 2 if args.dtype == "bf16" else 4
+    need = model.cfg.footprint_gb(bytes_per)
+    print(f"       training footprint {need:.2f} GB "
+          f"(weights + gradients + two optimiser states for all "
+          f"{report['total_parameters']/1e6:.0f}M parameters)")
+    if need > 14.0:
+        raise SystemExit(
+            f"this configuration needs {need:.1f} GB and the runner has 16 GB. "
+            f"Reduce --experts, or use --dtype bf16. Refusing to start a run "
+            f"that will be killed.")
 
     start_step = 0
     if args.init_from and args.init_from.is_file():
@@ -288,7 +315,7 @@ def main() -> None:
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimiser.step()
         step += 1
-        losses.append(float(main_loss))
+        losses.append(float(main_loss.detach()))
 
         if step % 10 == 0:
             recent = sum(losses[-10:]) / min(len(losses), 10)

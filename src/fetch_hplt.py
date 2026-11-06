@@ -40,7 +40,15 @@ DEVANAGARI = re.compile(r"[\u0900-\u097f]")
 LATIN = re.compile(r"[A-Za-z]")
 WORD = re.compile(r"[\u0900-\u097f]+|[A-Za-z][A-Za-z'-]+")
 
-MAP_URL = "https://data.hplt-project.org/three/sorted/hin_Deva.map"
+# The shard map is per language. The second run needs data that shares nothing
+# with the first -- a different language and a different domain -- while keeping
+# the same tokenizer, because two checkpoints can only be merged if their
+# embedding rows mean the same thing.
+LANG_MAPS = {
+    "hin_Deva": "https://data.hplt-project.org/three/sorted/hin_Deva.map",
+    "eng_Latn": "https://data.hplt-project.org/three/sorted/eng_Latn.map",
+}
+MAP_URL = LANG_MAPS["hin_Deva"]
 BIN = 9
 
 
@@ -105,10 +113,18 @@ def main() -> None:
                     help="decompressed bytes to stream before stopping")
     ap.add_argument("--max-docs", type=int, default=400_000)
     ap.add_argument("--min-chars", type=int, default=200)
-    ap.add_argument("--min-devanagari", type=float, default=0.5)
+    ap.add_argument("--min-devanagari", type=float, default=None,
+                   help="kept for compatibility; --min-script is the real knob")
     ap.add_argument("--out-dir", type=Path, default=Path("data/hplt"))
+    ap.add_argument("--lang", default="hin_Deva", choices=sorted(LANG_MAPS),
+                   help="which HPLT language to stream")
+    ap.add_argument("--min-script", type=float, default=0.5,
+                   help="fraction of characters that must be in the target script")
     args = ap.parse_args()
 
+    global MAP_URL
+    MAP_URL = LANG_MAPS[args.lang]
+    print(f"streaming HPLT {args.lang}")
     urls = fetch_map(MAP_URL)
     target = [u for u in urls if re.search(rf"/{BIN}_\d+\.jsonl\.zst$", u)]
     if not target:
@@ -152,8 +168,18 @@ def main() -> None:
                 reasons["mojibake"] += 1
                 continue
             d = len(DEVANAGARI.findall(text))
-            if d < len(text) * args.min_devanagari:
-                reasons["not_devanagari"] += 1
+            # Latin script for English, Devanagari for Hindi. Checking for
+            # Devanagari on an English run would reject every document and
+            # produce an empty corpus that reports success.
+            if args.lang == "eng_Latn":
+                latin = sum(1 for ch in text if "a" <= ch.lower() <= "z")
+                if latin < len(text) * args.min_script:
+                    reasons["not_target_script"] += 1
+                    continue
+            else:
+                if d < len(text) * args.min_script:
+                    reasons["not_target_script"] += 1
+                    continue
                 continue
 
             exact = hashlib.sha256(text[:2000].encode("utf-8")).hexdigest()[:16]
