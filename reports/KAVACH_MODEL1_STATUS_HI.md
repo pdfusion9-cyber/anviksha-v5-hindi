@@ -21,7 +21,7 @@ The repository has a deterministic guard independent of the neural model:
 4. pattern and behavior detectors
 5. learned/adversarial rules
 
-The guard is not itself the language model. A guarded inference adapter now exists in `src/kavach_model1.py`; it performs input screening, strict checkpoint loading, token generation, and output screening. This adapter has only prompt-construction/policy tests so far; it has **not** yet been run against the 2.14 GB production artifact.
+The guard is not itself the language model. A guarded inference adapter now exists in `src/kavach_model1.py`; it performs input screening, strict checkpoint loading, token generation, and output screening. This adapter has prompt-construction/policy tests and is covered by the branch-scoped CI. It has **not** yet been run against the 2.14 GB production artifact.
 
 ## Least-privilege profile
 
@@ -50,7 +50,7 @@ The workflow runs:
 - blocked code execution and outbound network tests
 - existing adversarial security regression cases
 
-A first CI run failed because the workflow pointed to a non-existent test path. The path was corrected. The next run passed 7 tests. The expanded run including the inference adapter tests is being checked separately.
+A first CI run failed because the workflow pointed to a non-existent test path; that path was corrected. The expanded CI run completed successfully: **10 passed, 1 warning**. The warning is non-fatal.
 
 ## Important limitations
 
@@ -58,6 +58,8 @@ A first CI run failed because the workflow pointed to a non-existent test path. 
 - A forward-pass smoke test does not establish factual accuracy, robust Hindi/English fluency, safe cyber reasoning, or useful chat responses.
 - The adapter uses the existing chat special tokens, but the five source copies were trained primarily with streamed raw text. Chat-format response quality must be measured and will likely require instruction fine-tuning.
 - Do not execute generated commands, scan external targets, or grant network/tool capabilities to the model. Keep analysis in a sandbox and use synthetic/authorized test data.
+
+An artifact-backed manual smoke workflow is prepared at `.github/workflows/kavach-model1-smoke.yml`. It downloads the exact successful merge artifact, loads the 574M checkpoint, checks Hindi/English/Hinglish benign prompts and confirms prompt-injection/outbound-exfiltration inputs are refused before model inference. It records raw outputs but is explicitly not a quality certification. It has not yet been dispatched.
 
 ## Next gates (in order)
 
