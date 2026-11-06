@@ -1,0 +1,133 @@
+name: moe-quarter
+
+# One Hindi model in four quarters, trained on four runners at once.
+#
+# The billion parameters split into four parts of eight experts each, about 137M
+# per part. Four runners train them simultaneously and the merge concatenates the
+# experts back to 32.
+#
+# Two measured findings shape this, and both came from timing rather than reading:
+#
+#   float32 beats bfloat16 on a CPU without bf16 hardware. On this model fp32
+#   ran at 950 tokens/second against 344 for bf16, a factor of 2.8. Every run so
+#   far used bf16 to halve the memory, which was right for a billion parameters
+#   in 16 GB and wrong for speed. A quarter is 137M, so fp32 costs 2.2 GB and
+#   fits comfortably -- the split pays twice.
+#
+#   a mixture of experts is slower than dense at equal active parameters (1061
+#   against 481 tokens/second for eight experts) because each expert is a small
+#   matmul. It still wins per total parameter, which is the point of using one.
+#
+# The budget is bound to the clock rather than to a timer: clock_bind.py measures
+# the CPU and reports parameters updated per cycle, which is the number the
+# request is really about.
+
+on:
+  workflow_dispatch:
+    inputs:
+      quarter:
+        description: "which quarter: 0, 1, 2 or 3"
+        required: true
+        default: "0"
+      minutes:
+        description: "clock budget per quarter"
+        required: true
+        default: "300"
+      tokens:
+        description: "token budget per quarter, 0 to use the clock instead"
+        required: true
+        default: "0"
+
+permissions:
+  contents: read
+
+jobs:
+  quarter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet numpy
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          python -c "import numpy, torch; print('numpy', numpy.__version__, 'torch', torch.__version__)"
+
+      - name: Measure this runner, then bind the budget to its clock
+        run: |
+          python src/clock_bind.py
+          echo "---"
+          cat runs/clock_binding.json
+
+      - name: Build the corpus and the one tokenizer
+        run: |
+          python src/fetch_security_corpus.py --out data/security_corpus
+          test -s data/security_corpus/corpus.jsonl || { echo "empty corpus"; exit 1; }
+          python src/split_security.py data/security_corpus/corpus.jsonl
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "src")
+          from pathlib import Path
+          from bpe_tokenizer import BPETokenizer
+          a = Path("data/security/half_a_defend.txt").read_text(encoding="utf-8")
+          b = Path("data/security/half_b_failures.txt").read_text(encoding="utf-8")
+          tok = BPETokenizer.train((a + "\n\n" + b)[:8_000_000], vocab_size=8192)
+          Path("shared").mkdir(exist_ok=True)
+          tok.save(Path("shared/tokenizer.json"))
+          print(f"tokenizer {tok.size} entries, identical for all four quarters")
+          PY
+
+      - name: Train this quarter
+        run: |
+          Q="${{ inputs.quarter }}"
+          echo "quarter $Q of 4, eight experts, float32"
+          python - <<PY
+          import json, sys, torch
+          sys.path.insert(0, "src")
+          from pathlib import Path
+          from moe_model import MoEConfig, MoELM
+          torch.manual_seed(20261106)
+          cfg = MoEConfig(vocab=8192, dim=512, layers=8, heads=8, seq_len=256,
+                          experts=8, top_k=2, ffn_mult=4)
+          Path("shared").mkdir(exist_ok=True)
+          torch.save({"model": MoELM(cfg).state_dict(), "config": cfg.__dict__,
+                      "args": {"stage": "init", "seed": 20261106}},
+                     "shared/init.pt")
+          c = cfg.counts()
+          print(f"quarter: {c['total']:,} parameters, {c['active']:,} active")
+          print(f"four of these merge to 32 experts")
+          PY
+          TOKARG=""
+          if [ "${{ inputs.tokens }}" != "0" ]; then TOKARG="--tokens ${{ inputs.tokens }}"; fi
+          python src/stream_train.py \
+            --text data/security/half_a_defend.txt \
+            --out "runs/quarter_$Q" \
+            --init-from shared/init.pt \
+            --tokenizer-from shared/tokenizer.json \
+            --vocab 8192 \
+            --dim 512 --layers 8 --heads 8 \
+            --experts 8 --top-k 2 --ffn-mult 4 \
+            --seq-len 256 --batch 8 \
+            --dtype fp32 --threads 4 \
+            --clock-budget-minutes ${{ inputs.minutes }} \
+            $TOKARG \
+            --content-filter \
+            --checkpoint-every 20
+
+      - name: Report
+        if: always()
+        run: |
+          cat "runs/quarter_${{ inputs.quarter }}/stream_report.json" 2>/dev/null || echo "no report"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quarter-${{ inputs.quarter }}
+          path: |
+            runs/quarter_${{ inputs.quarter }}/
+            runs/clock_binding.json
+          if-no-files-found: warn
