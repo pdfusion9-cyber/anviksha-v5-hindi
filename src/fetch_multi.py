@@ -111,18 +111,25 @@ def main() -> None:
     parser.add_argument("--cap", default=12000, type=int, help="max pairs per source")
     args = parser.parse_args()
 
-    extractors = {
-        "smangrul": (from_messages, download(SMANGRUL, "smangrul.parquet")),
-        "dolly": (from_columns, download(f"{BASE}/dolly/hi-00000-of-00001.parquet", "dolly.parquet")),
-        "anudesh": (from_messages, download(f"{BASE}/anudesh/hi-00000-of-00001.parquet", "anudesh.parquet")),
-        "flan_v2": (from_columns, download(f"{BASE}/flan_v2/hi-00000-of-00001.parquet", "flan.parquet")),
+    # Check licences before network acquisition. The earlier version called
+    # download() while constructing this dict, so it fetched three datasets
+    # that were then refused. Availability is not permission.
+    source_specs = {
+        "smangrul": (from_messages, SMANGRUL, "smangrul.parquet"),
+        "dolly": (from_columns, f"{BASE}/dolly/hi-00000-of-00001.parquet", "dolly.parquet"),
+        "anudesh": (from_messages, f"{BASE}/anudesh/hi-00000-of-00001.parquet", "anudesh.parquet"),
+        "flan_v2": (from_columns, f"{BASE}/flan_v2/hi-00000-of-00001.parquet", "flan.parquet"),
     }
 
-    denied = [n for n in extractors if not licence_ok(n)]
-    if denied:
-        print(f"refused on licence: {', '.join(denied)}")
-        for n in denied:
-            del extractors[n]
+    denied = [name for name in source_specs if not licence_ok(name)]
+    for name in denied:
+        print(f"{name}: refused before download (licence not approved)")
+    extractors = {
+        name: (extractor, download(url, filename))
+        for name, (extractor, url, filename) in source_specs.items()
+        if licence_ok(name)
+    }
+
 
     # one source at a time, appended to disk, so peak memory stays flat
     cache_dir = CACHE
