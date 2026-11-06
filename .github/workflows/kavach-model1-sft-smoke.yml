@@ -50,7 +50,7 @@ jobs:
         with:
           name: hindi-five-folded
           path: base
-          run-id: ${{ inputs.base_run_id || '42233090777' }}
+          run-id: ${{ github.event.inputs.base_run_id || '42233090777' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
       - name: Download isolated SFT candidate
@@ -58,7 +58,7 @@ jobs:
         with:
           name: kavach-model1-chat-sft-candidate
           path: candidate
-          run-id: ${{ inputs.sft_run_id || '42243800814' }}
+          run-id: ${{ github.event.inputs.sft_run_id || '42243800814' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
       - name: Verify candidate and tokenizer files
@@ -85,7 +85,7 @@ jobs:
           python src/evaluate_kavach_model1.py \
             --checkpoint candidate/runs/kavach_model1_chat_sft.pt \
             --tokenizer base/tokenizer.json \
-            --max-new-tokens "${{ inputs.max_new_tokens || '48' }}" \
+            --max-new-tokens "${{ github.event.inputs.max_new_tokens || '48' }}" \
             --out runs/kavach_model1_sft_smoke.json
       - name: Upload candidate smoke report
         if: always()
