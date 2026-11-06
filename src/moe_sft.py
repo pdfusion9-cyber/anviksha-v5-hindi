@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,17 @@ def build_example(
     return {"tokens": tokens, "loss_mask": loss_mask}
 
 
+def shuffled_epoch_order(size: int, rng: random.Random) -> list[int]:
+    """Return one deterministic epoch permutation: every pair exactly once."""
+    if size < 1:
+        raise ValueError("epoch size must be positive")
+    order = list(range(size))
+    rng.shuffle(order)
+    if len(order) != size or len(set(order)) != size:
+        raise AssertionError("epoch sampler produced duplicates or omissions")
+    return order
+
+
 def make_batch(examples: list[dict[str, list[int]]], pad_id: int):
     if not examples:
         raise ValueError("cannot create a batch from zero examples")
@@ -191,13 +203,13 @@ def parse_args():
     parser.add_argument("--heldout", type=Path, required=True)
     parser.add_argument("--out", type=Path, default=Path("runs/kavach_model1_chat_sft.pt"))
     parser.add_argument("--report", type=Path, default=Path("runs/kavach_model1_chat_sft.json"))
-    parser.add_argument("--steps", type=int, default=120)
+    parser.add_argument("--steps", type=int, default=0, help="0 = one full shuffled pass over every usable training pair")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-seq-len", type=int, default=256)
     parser.add_argument("--max-answer-tokens", type=int, default=96)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--balance-weight", type=float, default=0.001)
-    parser.add_argument("--eval-limit", type=int, default=32)
+    parser.add_argument("--eval-limit", type=int, default=128)
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--seed", type=int, default=20261106)
     return parser.parse_args()
@@ -205,8 +217,8 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.steps < 1 or args.batch_size < 1:
-        raise SystemExit("--steps and --batch-size must be positive")
+    if args.steps < 0 or args.batch_size < 1:
+        raise SystemExit("--steps must be >=0 (0 means one epoch) and --batch-size must be positive")
     if args.out.resolve() == args.checkpoint.resolve():
         raise SystemExit("refusing to overwrite the source checkpoint")
 
@@ -259,9 +271,40 @@ def main():
     if len(usable) < 100:
         raise SystemExit(f"too few encodable SFT pairs after tokenization: {len(usable)}")
 
+    # A zero --steps setting means one full pass over the usable corpus.
+    # The previous random.choice(..., with replacement) loop trained on only
+    # about 119 distinct pairs in 120 steps out of 10,376 (~1.1% coverage).
+    steps = args.steps or math.ceil(len(usable) / args.batch_size)
+    if args.batch_size > len(usable):
+        raise SystemExit("--batch-size cannot exceed the usable training pair count")
+
+    order = shuffled_epoch_order(len(usable), rng)
+    cursor = 0
     losses: list[float] = []
-    for step in range(1, args.steps + 1):
-        batch_examples = [rng.choice(usable) for _ in range(args.batch_size)]
+    warmup_steps = max(1, int(0.03 * steps))
+    log_interval = max(10, steps // 20)
+    for step in range(1, steps + 1):
+        # Consume every example once per shuffled epoch; reshuffle only at
+        # epoch boundaries. A batch may safely cross an epoch boundary.
+        selected: list[int] = []
+        while len(selected) < args.batch_size:
+            if cursor >= len(order):
+                order = shuffled_epoch_order(len(usable), rng)
+                cursor = 0
+            take = min(args.batch_size - len(selected), len(order) - cursor)
+            selected.extend(order[cursor : cursor + take])
+            cursor += take
+        batch_examples = [usable[i] for i in selected]
+
+        # Short warm-up followed by cosine decay stabilizes the longer pass.
+        if step <= warmup_steps:
+            current_lr = args.learning_rate * step / warmup_steps
+        else:
+            progress = (step - warmup_steps) / max(1, steps - warmup_steps)
+            current_lr = args.learning_rate * 0.5 * (1.0 + math.cos(math.pi * progress))
+        for group in optimiser.param_groups:
+            group["lr"] = current_lr
+
         x, y, mask = make_batch(batch_examples, tokenizer.pad)
         optimiser.zero_grad(set_to_none=True)
         token_loss, balance = masked_loss(model, x, y, mask, tokenizer.pad)
@@ -272,11 +315,11 @@ def main():
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimiser.step()
         losses.append(float(token_loss.detach()))
-        if step == 1 or step % 10 == 0 or step == args.steps:
+        if step == 1 or step % log_interval == 0 or step == steps:
             recent = sum(losses[-10:]) / min(10, len(losses))
             print(
-                f"step {step}/{args.steps} answer_loss={recent:.4f} "
-                f"balance={float(balance.detach()):.4f} "
+                f"step {step}/{steps} answer_loss={recent:.4f} "
+                f"lr={current_lr:.7g} balance={float(balance.detach()):.4f} "
                 f"answer_tokens={int(mask.sum().item())}",
                 flush=True,
             )
@@ -297,10 +340,14 @@ def main():
             "model": model.state_dict(),
             "config": config.__dict__,
             "sft": {
-                "steps": args.steps,
+                "steps": steps,
+                "sampling": "shuffled_without_replacement_with_epoch_reshuffle",
+                "examples_processed": steps * args.batch_size,
+                "training_coverage_epochs": round((steps * args.batch_size) / len(usable), 4),
                 "train_pairs": len(train_rows),
                 "usable_pairs": len(usable),
                 "heldout_pairs": len(heldout_rows),
+        "heldout_scope": "same licensed source random split; not an unseen-source generalization set",
                 "answer_only_loss": True,
                 "parameter_count": parameter_count,
             },
@@ -329,6 +376,7 @@ def main():
         "notes": [
             "This run teaches the exact chat boundary and EOS tokens used at inference.",
             "A lower held-out loss is useful but does not establish factual accuracy.",
+            "The held-out split is from the same licensed source; independent-source generalization remains untested.",
             "Run the six-case guarded smoke test before making any quality claim.",
         ],
     }
