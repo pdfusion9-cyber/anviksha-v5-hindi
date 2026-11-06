@@ -132,45 +132,19 @@ class KavachModel1:
                 break
 
         if hasattr(self.tokenizer, "token_bytes"):
-            # A max-token cutoff can land in the middle of a multi-byte UTF-8
-            # character. Trim only the unfinished suffix; never emit U+FFFD.
-            raw = b"".join(self.tokenizer.token_bytes(t) for t in generated
-                           if t < self.tokenizer.base)
+            # A max-token cutoff can land inside a multi-byte UTF-8 character.
+            # Drop only the unfinished suffix; never emit U+FFFD.
+            answer = ""
             while generated:
+                raw = b"".join(
+                    self.tokenizer.token_bytes(t)
+                    for t in generated if t < self.tokenizer.base
+                )
                 try:
                     answer = raw.decode("utf-8", errors="strict").strip()
                     break
-                except UnicodeDecodeError as exc:
-                    raw = raw[:exc.start]
-                    # Rebuild from whole tokens at the last valid boundary.
-                    kept = []
-                    candidate = bytearray()
-                    for token_id in generated:
-                        if token_id >= self.tokenizer.base:
-                            continue
-                        token_bytes = self.tokenizer.token_bytes(token_id)
-                        try:
-                            (candidate + token_bytes).decode("utf-8", errors="strict")
-                            candidate.extend(token_bytes)
-                            kept.append(token_id)
-                        except UnicodeDecodeError:
-                            # A valid prefix may be incomplete; preserve it
-                            # only if a later token completes it.
-                            candidate.extend(token_bytes)
-                            kept.append(token_id)
-                    while kept:
-                        try:
-                            answer = b"".join(
-                                self.tokenizer.token_bytes(t) for t in kept
-                            ).decode("utf-8", errors="strict").strip()
-                            break
-                        except UnicodeDecodeError:
-                            kept.pop()
-                    else:
-                        answer = ""
-                    break
-            else:
-                answer = ""
+                except UnicodeDecodeError:
+                    generated.pop()
         else:
             answer = self.tokenizer.decode(generated).strip()
         if not answer:
