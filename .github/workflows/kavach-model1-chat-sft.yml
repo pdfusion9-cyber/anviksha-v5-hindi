@@ -3,6 +3,12 @@ name: kavach-model1-chat-sft
 # Supervised chat adaptation is a separate candidate. The merged base artifact
 # remains immutable; only the candidate is evaluated by the guarded smoke job.
 on:
+  push:
+    branches:
+      - anviksha-safe-merge-20261106
+    paths:
+      - ".github/workflows/kavach-model1-chat-sft.yml"
+      - "src/moe_sft.py"
   workflow_dispatch:
     inputs:
       base_run_id:
@@ -43,7 +49,7 @@ jobs:
         with:
           name: hindi-five-folded
           path: base
-          run-id: ${{ inputs.base_run_id }}
+          run-id: ${{ inputs.base_run_id || '42233090777' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
       - name: Verify base and tokenizer
@@ -86,8 +92,8 @@ jobs:
             --heldout data/multi_heldout.jsonl \
             --out runs/kavach_model1_chat_sft.pt \
             --report runs/kavach_model1_chat_sft.json \
-            --steps "${{ inputs.steps }}" \
-            --learning-rate "${{ inputs.learning_rate }}" \
+            --steps "${{ inputs.steps || '120' }}" \
+            --learning-rate "${{ inputs.learning_rate || '0.00002' }}" \
             --batch-size 1 --max-seq-len 256 --max-answer-tokens 96 \
             --eval-limit 32 --threads 2
       - name: Verify base remains unchanged and candidate is loadable
