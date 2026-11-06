@@ -1,0 +1,235 @@
+name: moe-five
+
+# Five copies of one model, each 121M parameters, each trained on a domain the
+# other four never see, then all five transferred into one.
+#
+#   121,221,888 parameters per copy, 26,750,976 active
+#   five copies, 12 experts each
+#   merged: 60 experts, 574,206,720 parameters, same 26.75M active
+#
+# Why this shape is better than the billion:
+#
+#   121M in float32 is 1.9 GB, so it fits a runner with room to spare, and fp32
+#   measured 2.8x faster than bf16 on a CPU without bf16 hardware.
+#
+#   five runners at once is five times the throughput of one, and the merge is
+#   the same operation that was already proved: concatenate experts, average the
+#   shared parts.
+#
+#   each copy sees one domain. Cryptography, network, application, incident and
+#   governance share little vocabulary, so the merge adds knowledge rather than
+#   duplicating it -- which is the failure mode a merge of overlapping corpora
+#   produces.
+#
+# What it still cannot do, and the report says so: 3.6 billion tokens per copy
+# is what 121M parameters want at 20 tokens each with the 1.5x margin, and Hindi
+# open data supplies about half a billion. The runs prove the architecture and
+# the five-way transfer. They do not produce a trained model.
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "clock budget per copy"
+        required: true
+        default: "300"
+      copy:
+        description: "which copy: 0..4, or all to launch five"
+        required: true
+        default: "all"
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: inputs.copy == 'all'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet numpy
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Build the corpus and split it five ways
+        run: |
+          python src/fetch_security_corpus.py --out data/security_corpus
+          test -s data/security_corpus/corpus.jsonl || { echo "empty corpus"; exit 1; }
+          python src/split_security.py data/security_corpus/corpus.jsonl
+          for f in data/security/copy_*.txt; do
+            echo "$f: $(wc -c < $f) bytes"
+            test -s "$f" || { echo "an empty copy cannot be trained or merged"; exit 1; }
+          done
+
+      - name: One tokenizer, shared by all five
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "src")
+          from pathlib import Path
+          from bpe_tokenizer import BPETokenizer
+          parts = sorted(Path("data/security").glob("copy_*.txt"))
+          text = "\n\n".join(p.read_text(encoding="utf-8") for p in parts)
+          tok = BPETokenizer.train(text[:8_000_000], vocab_size=8192)
+          Path("shared").mkdir(exist_ok=True)
+          tok.save(Path("shared/tokenizer.json"))
+          print(f"tokenizer {tok.size} entries on all five domains")
+          print("the same file for every copy, or embedding row i means")
+          print("different strings in each and the transfer is meaningless")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: five-shared
+          path: |
+            shared/tokenizer.json
+            data/security/copy_*.txt
+            data/security/split_five.json
+          if-no-files-found: error
+
+  copy:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { copy: 0, domain: crypto }
+          - { copy: 1, domain: network }
+          - { copy: 2, domain: application }
+          - { copy: 3, domain: incident }
+          - { copy: 4, domain: governance }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --quiet numpy
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: five-shared
+
+      - name: Train this copy
+        run: |
+          D="${{ matrix.domain }}"
+          CORPUS="data/security/copy_${D}.txt"
+          echo "copy ${{ matrix.copy }} on $D, $(wc -c < $CORPUS) bytes"
+          test -f shared/tokenizer.json || { echo "no shared tokenizer"; exit 1; }
+          python - <<'PY'
+          import sys, torch
+          sys.path.insert(0, "src")
+          from pathlib import Path
+          from moe_model import MoEConfig, MoELM
+          torch.manual_seed(20261106)   # one seed: shared parts begin identical
+          cfg = MoEConfig(vocab=8192, dim=384, layers=8, heads=6, seq_len=256,
+                          experts=12, top_k=2, ffn_mult=4)
+          Path("shared").mkdir(exist_ok=True)
+          torch.save({"model": MoELM(cfg).state_dict(), "config": cfg.__dict__,
+                      "args": {"stage": "init", "seed": 20261106}},
+                     "shared/init.pt")
+          c = cfg.counts()
+          print(f"copy: {c['total']:,} parameters, {c['active']:,} active")
+          print(f"five copies merge to 574,206,720 with 60 experts")
+          PY
+          python src/stream_train.py \
+            --text "$CORPUS" \
+            --out "runs/copy_${{ matrix.copy }}" \
+            --init-from shared/init.pt \
+            --tokenizer-from shared/tokenizer.json \
+            --vocab 8192 \
+            --dim 384 --layers 8 --heads 6 \
+            --experts 12 --top-k 2 --ffn-mult 4 \
+            --seq-len 256 --batch 8 \
+            --dtype fp32 --threads 4 \
+            --clock-budget-minutes ${{ inputs.minutes }} \
+            --content-filter \
+            --checkpoint-every 20
+
+      - name: Report
+        if: always()
+        run: cat "runs/copy_${{ matrix.copy }}/stream_report.json" 2>/dev/null || echo "no report"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copy-${{ matrix.copy }}
+          path: runs/copy_${{ matrix.copy }}/
+          if-no-files-found: warn
+
+  merge:
+    needs: copy
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --quiet numpy
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: copy-*
+          path: copies
+      - uses: actions/download-artifact@v4
+        with:
+          name: five-shared
+
+      - name: Transfer all five into one model
+        run: |
+          ls copies
+          FOUND=$(find copies -name chat.pt | sort)
+          echo "checkpoints found:"; echo "$FOUND"
+          COUNT=$(echo "$FOUND" | wc -l)
+          if [ "$COUNT" -lt 2 ]; then
+            echo "only $COUNT checkpoint(s): a transfer needs at least two"
+            exit 1
+          fi
+          # fold them one at a time: base plus each incoming, in order
+          BASE=$(echo "$FOUND" | head -1)
+          cp "$BASE" runs/acc.pt
+          mkdir -p runs/acc
+          cp shared/tokenizer.json runs/acc/tokenizer.json 2>/dev/null || true
+          for NEXT in $(echo "$FOUND" | tail -n +2); do
+            echo "=== folding in $NEXT ==="
+            python src/merge_experts.py               --base runs/acc.pt --incoming "$NEXT"               --out runs/acc_next.pt               --threshold 0.95 --average-shared
+            mv runs/acc_next.pt runs/acc.pt
+            cp "$(dirname $NEXT)/tokenizer.json" runs/acc/tokenizer.json 2>/dev/null || true
+          done
+          mkdir -p runs/merged
+          mv runs/acc.pt runs/merged/hindi_574m.pt
+          cp shared/tokenizer.json runs/merged/tokenizer.json
+          python - <<'PY'
+          import sys, torch
+          sys.path.insert(0, "src")
+          from pathlib import Path
+          from moe_model import MoEConfig
+          st = torch.load("runs/merged/hindi_574m.pt", weights_only=False)
+          cfg = MoEConfig(**st["config"])
+          c = cfg.counts()
+          print(f"merged: {c['total']:,} parameters, {c['active']:,} active")
+          print(f"experts: {cfg.experts}")
+          Path("runs/merged/summary.json").write_text(
+              __import__("json").dumps(c, indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hindi-five-merged
+          path: runs/merged/
+          if-no-files-found: warn

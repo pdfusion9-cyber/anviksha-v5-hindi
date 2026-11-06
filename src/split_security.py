@@ -78,6 +78,57 @@ def split(documents: list[str], min_score: int = 1) -> tuple[list[str], list[str
     return a, b, report
 
 
+# Five domains, so five copies each see something the other four do not. The
+# vocabulary sets are disjoint by design: a document about cryptography shares
+# little with one about compliance, and a merge of five experts trained on
+# overlapping text adds parameters without adding knowledge.
+DOMAINS = {
+    "crypto": {"encryption", "cipher", "aes", "rsa", "ecc", "sha", "hmac",
+               "hash", "salt", "bcrypt", "argon2", "key", "pki", "certificate",
+               "tls", "ssl", "signature", "nonce", "entropy", "random"},
+    "network": {"firewall", "router", "switch", "vpn", "dns", "tcp", "udp",
+                "packet", "subnet", "vlan", "proxy", "gateway", "port",
+                "segmentation", "ids", "ips", "waf", "ddos", "mitm"},
+    "application": {"injection", "xss", "csrf", "ssrf", "deserialization",
+                    "buffer", "overflow", "rce", "ssti", "xxe", "dependency",
+                    "supply", "sandbox", "input", "validation", "escaping"},
+    "incident": {"incident", "breach", "forensics", "response", "containment",
+                 "eradication", "recovery", "post-mortem", "root cause",
+                 "timeline", "triage", "escalation", "playbook", "lessons"},
+    "governance": {"policy", "compliance", "audit", "gdpr", "iso", "nist",
+                   "risk", "control", "framework", "governance", "privacy",
+                   "consent", "retention", "classification", "standard"},
+}
+
+
+def split_five(documents: list[str]) -> tuple[dict[str, list[str]], dict]:
+    """Assign each document to the one domain it matches best."""
+    buckets: dict[str, list[str]] = {k: [] for k in DOMAINS}
+    unassigned = 0
+    for doc in documents:
+        low = doc.lower()
+        scores = {name: sum(1 for w in words if w in low)
+                  for name, words in DOMAINS.items()}
+        best = max(scores, key=scores.get)
+        if scores[best] == 0:
+            unassigned += 1
+            continue
+        buckets[best].append(doc)
+    empty = [k for k, v in buckets.items() if not v]
+    report = {
+        "documents": len(documents),
+        "per_domain": {k: len(v) for k, v in buckets.items()},
+        "chars": {k: sum(len(d) for d in v) for k, v in buckets.items()},
+        "unassigned": unassigned,
+        "empty_domains": empty,
+    }
+    if empty:
+        raise SystemExit(
+            f"domains with no documents: {empty}. Five copies need five "
+            f"corpora; an empty one produces a model with nothing to merge.")
+    return buckets, report
+
+
 def load_corpus(paths: list[Path]) -> list[str]:
     docs: list[str] = []
     for p in paths:
@@ -127,6 +178,16 @@ def main() -> None:
     else:
         print("  the halves are distinct enough for a merge to add knowledge")
     print(f"\n  written to {out}/half_a_defend.txt and half_b_failures.txt")
+
+    # and the five-way split for the five-copy plan
+    five, rep5 = split_five(docs)
+    for name, items in five.items():
+        (out / f"copy_{name}.txt").write_text("\n\n".join(items),
+                                              encoding="utf-8")
+    (out / "split_five.json").write_text(json.dumps(rep5, indent=2))
+    print("\n  five-way split")
+    for name, n in rep5["per_domain"].items():
+        print(f"    {name:<14} {n:>6} docs  {rep5['chars'][name]:>10,} chars")
 
 
 if __name__ == "__main__":
