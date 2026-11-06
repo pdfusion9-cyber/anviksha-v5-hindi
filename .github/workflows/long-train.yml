@@ -1,0 +1,230 @@
+name: long-train
+
+# One copy, trained past the length of a single job, by chaining itself.
+#
+# A GitHub job ends at 350 minutes. Training that needs days therefore has to be
+# a chain of jobs, each resuming the optimiser and the step count from the one
+# before. This workflow dispatches its own successor at the end, so the chain
+# runs without anyone watching, and stops when the target step count is reached.
+#
+# Why this exists: the five-copy merge produced 60 experts and dropped none, and
+# that proved the plumbing and nothing else. Measured with expert_divergence.py,
+# the copies had moved almost nothing from their shared starting point, so the
+# sixty experts carried one copy's worth of knowledge. Divergence is what the
+# merge needs, and divergence comes from steps.
+#
+# Each segment writes:
+#   runs/copy_N/chat.pt        weights, optimiser state, step, token count
+#   runs/copy_N/stream_report  what this segment actually did
+# and the next segment loads all of it, so nothing restarts from scratch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      copy:
+        description: "which copy to continue: 0..4"
+        required: true
+        default: "0"
+      domain:
+        description: "domain for this copy"
+        required: true
+        default: "governance"
+      resume-run-id:
+        description: "run id holding the previous segment, empty to start fresh"
+        required: false
+        default: ""
+      target-steps:
+        description: "stop when the checkpoint reaches this many steps"
+        required: true
+        default: "20000"
+      minutes:
+        description: "minutes for this segment"
+        required: true
+        default: "330"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  segment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --quiet numpy
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          python -c "import numpy, torch; print('torch', torch.__version__)"
+
+      - name: Build the corpus and the shared tokenizer
+        run: |
+          python src/fetch_security_corpus.py --out data/security_corpus
+          test -s data/security_corpus/corpus.jsonl || { echo "empty corpus"; exit 1; }
+          python src/split_security.py data/security_corpus/corpus.jsonl
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "src")
+          from pathlib import Path
+          from bpe_tokenizer import BPETokenizer
+          parts = sorted(Path("data/security").glob("copy_*.txt"))
+          text = "\n\n".join(p.read_text(encoding="utf-8") for p in parts)
+          # deterministic: the same tokenizer every segment, or the checkpoint
+          # ids would shift and the weights would mean something else
+          tok = BPETokenizer.train(text[:8_000_000], vocab_size=8192)
+          Path("shared").mkdir(exist_ok=True)
+          tok.save(Path("shared/tokenizer.json"))
+          print(f"tokenizer {tok.size} entries")
+          PY
+
+      - name: Fetch the previous segment
+        if: inputs.resume-run-id != ''
+        uses: actions/download-artifact@v4
+        with:
+          pattern: segment-*
+          path: prev
+          run-id: ${{ inputs.resume-run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+
+      - name: Train this segment
+        run: |
+          set -eu
+          C="${{ inputs.copy }}"
+          D="${{ inputs.domain }}"
+          CORPUS="data/security/copy_${D}.txt"
+          test -s "$CORPUS" || { echo "empty corpus for $D"; exit 1; }
+          echo "copy $C on $D, $(wc -c < "$CORPUS") bytes"
+
+          PREV=""
+          if [ -n "${{ inputs.resume-run-id }}" ]; then
+            PREV=$(find prev -name chat.pt | head -1 || true)
+          fi
+
+          if [ -n "$PREV" ]; then
+            echo "resuming from $PREV"
+            python - <<PY
+            import json, torch
+            from pathlib import Path
+            st = torch.load("$PREV", weights_only=False)
+            e = st.get("extra", {})
+            print(f"previous: step {st.get('step', 0):,}, "
+                  f"tokens {e.get('tokens_seen', 0):,}")
+            Path("shared").mkdir(exist_ok=True)
+            torch.save(st, "shared/init.pt")
+            PY
+            INITARG="--init-from shared/init.pt --resume"
+            OUT="runs/copy_$C"
+            mkdir -p "$OUT"
+            cp "$PREV" "$OUT/chat.pt"
+          else
+            echo "fresh start"
+            python - <<'PY'
+            import sys, torch
+            sys.path.insert(0, "src")
+            from pathlib import Path
+            from moe_model import MoEConfig, MoELM
+            torch.manual_seed(20261106)
+            cfg = MoEConfig(vocab=8192, dim=384, layers=8, heads=6, seq_len=256,
+                            experts=12, top_k=2, ffn_mult=4)
+            Path("shared").mkdir(exist_ok=True)
+            torch.save({"model": MoELM(cfg).state_dict(), "config": cfg.__dict__,
+                        "args": {"stage": "init", "seed": 20261106}},
+                       "shared/init.pt")
+            c = cfg.counts()
+            print(f"init: {c['total']:,} parameters, {c['active']:,} active")
+            PY
+            INITARG="--init-from shared/init.pt"
+            OUT="runs/copy_$C"
+          fi
+
+          # --tokens sets the budget this segment aims for; the clock is the
+          # hard stop. Both are reported, so a shortfall is visible.
+          python src/stream_train.py \
+            --text "$CORPUS" \
+            --out "$OUT" \
+            $INITARG \
+            --tokenizer-from shared/tokenizer.json \
+            --vocab 8192 \
+            --dim 384 --layers 8 --heads 6 \
+            --experts 12 --top-k 2 --ffn-mult 4 \
+            --seq-len 256 --batch 8 \
+            --dtype fp32 --threads 4 \
+            --clock-budget-minutes ${{ inputs.minutes }} \
+            --content-filter \
+            --checkpoint-every 25
+
+      - name: Did this segment reach the target
+        id: check
+        if: always()
+        run: |
+          OUT="runs/copy_${{ inputs.copy }}"
+          STEP=0
+          if [ -f "$OUT/stream_report.json" ]; then
+            STEP=$(grep -o '"step": *[0-9]*' "$OUT/stream_report.json" | grep -o '[0-9]*' | head -1)
+          fi
+          STEP=${STEP:-0}
+          echo "step now $STEP, target ${{ inputs.target-steps }}"
+          echo "step=$STEP" >> "$GITHUB_OUTPUT"
+          if [ "$STEP" -ge "${{ inputs.target-steps }}" ]; then
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "done=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Measure divergence from the starting point
+        if: always()
+        run: |
+          if [ -f "runs/copy_${{ inputs.copy }}/chat.pt" ]; then
+            python src/expert_divergence.py \
+              --a shared/init.pt \
+              --b "runs/copy_${{ inputs.copy }}/chat.pt" \
+              --init shared/init.pt \
+              --out "runs/copy_${{ inputs.copy }}/divergence.json" || true
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: segment-${{ inputs.copy }}-${{ github.run_id }}
+          path: runs/copy_${{ inputs.copy }}/
+          if-no-files-found: warn
+
+      - name: Chain the next segment
+        if: always() && steps.check.outputs.done == 'false'
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tok = os.environ["GH_TOKEN"]
+          body = {
+              "ref": "main",
+              "inputs": {
+                  "copy": os.environ["COPY"],
+                  "domain": os.environ["DOMAIN"],
+                  "resume-run-id": os.environ["RUN_ID"],
+                  "target-steps": os.environ["TARGET"],
+                  "minutes": os.environ["MINUTES"],
+              },
+          }
+          url = f"https://api.github.com/repos/{repo}/actions/workflows/long-train.yml/dispatches"
+          req = urllib.request.Request(
+              url, data=json.dumps(body).encode(),
+              headers={"Authorization": f"Bearer {tok}",
+                       "Accept": "application/vnd.github+json",
+                       "Content-Type": "application/json"},
+              method="POST")
+          urllib.request.urlopen(req)
+          print(f"next segment dispatched, resuming from run {os.environ['RUN_ID']}")
+          PY
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPY: ${{ inputs.copy }}
+          DOMAIN: ${{ inputs.domain }}
+          RUN_ID: ${{ github.run_id }}
+          TARGET: ${{ inputs.target-steps }}
+          MINUTES: ${{ inputs.minutes }}
