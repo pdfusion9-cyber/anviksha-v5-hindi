@@ -79,7 +79,7 @@ def layer_count(state: dict) -> int:
 
 def merge(base_path: Path, incoming_path: Path, out_path: Path,
           threshold: float = 0.80, max_new: int | None = None,
-          verbose: bool = True) -> dict:
+          verbose: bool = True, average_shared: bool = False) -> dict:
     base = torch.load(base_path, weights_only=False)
     inc = torch.load(incoming_path, weights_only=False)
 
@@ -102,11 +102,25 @@ def merge(base_path: Path, incoming_path: Path, out_path: Path,
     if layers != layer_count(sb):
         raise SystemExit(f"layer count differs: {layers} vs {layer_count(sb)}")
 
-    report = {"base": str(base_path), "incoming": str(incoming_path),
-              "experts_base": na, "experts_incoming": nb, "layers": layers,
-              "threshold": threshold, "per_layer": []}
-
+    # The shared tensors first: embedding, positions, attention, norms. For two
+    # hats of one model these were trained on different data by each half, so the
+    # faithful transfer is the mean rather than one side's copy.
     merged = {k: v.clone() for k, v in sa.items()}
+    averaged = 0
+    if average_shared:
+        for key, tensor in sa.items():
+            if (key in sb and ".moe.experts." not in key
+                    and ".moe.router." not in key
+                    and tensor.shape == sb[key].shape):
+                merged[key] = (tensor.float() + sb[key].float()).div(2).to(
+                    tensor.dtype)
+                averaged += 1
+
+    report = {
+        "averaged_shared_tensors": averaged,
+        "base": str(base_path), "incoming": str(incoming_path),
+        "experts_base": na, "experts_incoming": nb, "layers": layers,
+        "threshold": threshold, "per_layer": []}
     total_added = 0
     total_dupes = 0
 
@@ -187,6 +201,11 @@ def main() -> None:
                     help="cosine similarity above which an incoming expert is "
                          "a duplicate and is dropped")
     ap.add_argument("--max-new", type=int, default=None)
+    ap.add_argument("--average-shared", action="store_true",
+                    help="average the non-expert tensors instead of keeping the "
+                         "base's copy. For two hats of one model the shared parts "
+                         "were learned from different material by each half and "
+                         "neither is wrong.")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what would happen, write nothing")
     args = ap.parse_args()
@@ -205,7 +224,8 @@ def main() -> None:
               f"{layer_count(base)} layers")
         return
 
-    r = merge(args.base, args.incoming, args.out, args.threshold, args.max_new)
+    r = merge(args.base, args.incoming, args.out, args.threshold, args.max_new,
+              average_shared=args.average_shared)
     print(f"\nexperts {r['experts_base']} + {r['experts_added']} new "
           f"- {r['experts_dropped_as_duplicate']} duplicates = {r['experts_final']}")
     print(f"written to {args.out}")

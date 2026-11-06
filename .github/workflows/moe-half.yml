@@ -1,43 +1,44 @@
 name: moe-half
 
-# One half of a billion-parameter model, trained on half the security corpus.
+# One model, two hats, trained at the same time.
 #
-# Two runs of this workflow make the whole. Each trains 32 experts, about 550M
-# parameters, on a half of the corpus that the other never sees. The merge then
-# adds B's experts to A's and the router grows from 32 rows to 64, which is
-# 1,086,473,216 parameters -- the billion the two halves were split from.
+# The model is a billion parameters split into two disjoint halves. Half the
+# parameters -- 32 experts -- learn from corpus A; the other half learn from
+# corpus B; both halves train simultaneously, each seeing documents the other
+# never sees. When both finish, every parameter is transferred into the single
+# model: the experts concatenate to 64, and the parts that encode "how this model
+# reads text" are averaged, because both halves learned that from different
+# material and neither is wrong.
 #
-# Why split by experts and not by layers: a model with half the layers is half a
-# model and cannot be evaluated, and a model with half the width is a different
-# architecture. An expert is the one unit that can be trained alone, tested alone
-# and then added without reshaping anything, which is exactly what a merge needs.
+# Three jobs, and the shape matters:
 #
-# What this cannot do, and the run will say so at the end: 240 minutes of CPU on
-# 550M parameters is about a hundred steps and a few hundred thousand tokens.
-# That proves the architecture and the merge. It does not produce a model that
-# knows cyber security. Nothing on this hardware will.
+#   prepare    builds the corpus, splits it, learns the tokenizer once and writes
+#              the initial weights. This runs alone because everything after it
+#              depends on the tokenizer being the same on both sides: if half A
+#              and half B tokenise differently, embedding row i means different
+#              strings in each and transferring parameters produces nonsense.
+#
+#   half-a  \
+#            > both start together and run at the same time, which is what "trained
+#   half-b  /  simultaneously" has to mean or the halves see different amounts of
+#              wall-clock and the comparison is not fair.
+#
+#   merge      combines them into one model and reports what was added, what was
+#              duplicated and what it cost.
 
 on:
   workflow_dispatch:
     inputs:
-      half:
-        description: "a = defending, b = failures"
-        required: true
-        default: "a"
-      tokenizer-from:
-        description: "run id whose tokenizer to reuse (required for b)"
-        required: false
-        default: ""
       minutes:
-        description: "training budget"
+        description: "training budget per half"
         required: true
         default: "240"
       experts:
-        description: "experts per half; 32 makes 64 after the merge"
+        description: "experts per half; 32 makes 64 after the transfer"
         required: true
         default: "32"
       batch:
-        description: "batch size; half the parameters allows a bigger batch"
+        description: "batch size per half"
         required: true
         default: "8"
 
@@ -45,85 +46,109 @@ permissions:
   contents: read
 
 jobs:
-  train:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install
         run: |
           python -m pip install --quiet --upgrade pip
           python -m pip install --quiet numpy
           python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
-          python - <<'PY'
-          import numpy, torch
-          print("numpy", numpy.__version__, "torch", torch.__version__)
-          # fail here rather than after the corpus has been built
-          assert hasattr(torch, "bfloat16")
-          PY
-
-      - name: What this run is
-        run: |
-          python - <<'PY'
-          from src.moe_model import MoEConfig
-          c = MoEConfig(vocab=8192, dim=512, layers=8, heads=8, seq_len=256,
-                        experts=32, top_k=2, ffn_mult=4).counts()
-          print(f"this half   {c['total']:,} parameters")
-          print(f"active      {c['active']:,}  ({c['active']/c['total']*100:.1f}%)")
-          print(f"bf16        {c['total']*2*4/1e9:.2f} GB for a training step")
-          print()
-          print("two of these merge to 1,086,473,216 parameters")
-          print("at roughly 100 steps per run the merge proves the architecture")
-          print("and the transfer. It does not produce a knowledgeable model.")
-          PY
+          python -c "import numpy, torch; print('numpy', numpy.__version__, 'torch', torch.__version__)"
 
       - name: Build the security corpus and split it
         run: |
           python src/fetch_security_corpus.py --out data/security_corpus
-          ls -la data/security_corpus/ | head
           test -s data/security_corpus/corpus.jsonl || { echo "empty corpus"; exit 1; }
           python src/split_security.py data/security_corpus/corpus.jsonl
 
-      - name: Get the tokenizer
-        if: inputs.tokenizer-from != ''
+      - name: Learn the one tokenizer both halves will share
         run: |
           python - <<'PY'
-          import os, subprocess, sys, json, urllib.request
-          run_id = os.environ["TOK_FROM"]
-          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}/artifacts"
-          req = urllib.request.Request(url, headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}"})
-          arts = json.loads(urllib.request.urlopen(req).read())["artifacts"]
-          want = [a for a in arts if a["name"].startswith("moe-half-a")]
-          if not want:
-              print("no artifact from the other half; cannot share a tokenizer")
-              sys.exit(1)
-          a = want[0]
-          req = urllib.request.Request(a["archive_download_url"],
-                                       headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}"})
-          open("tok.zip", "wb").write(urllib.request.urlopen(req).read())
-          subprocess.run(["unzip", "-o", "tok.zip", "-d", "tok"], check=True)
-          print("tokenizer brought over:", os.listdir("tok"))
+          import json, sys
+          sys.path.insert(0, "src")
+          from pathlib import Path
+          from bpe_tokenizer import BPETokenizer
+          a = Path("data/security/half_a_defend.txt").read_text(encoding="utf-8")
+          b = Path("data/security/half_b_failures.txt").read_text(encoding="utf-8")
+          # learned on BOTH halves, because it is the one thing that must be
+          # identical on both sides for the transfer to mean anything
+          sample = (a + "\n\n" + b)[:8_000_000]
+          tok = BPETokenizer.train(sample, vocab_size=8192)
+          Path("shared").mkdir(exist_ok=True)
+          tok.save(Path("shared/tokenizer.json"))
+          print(f"tokenizer: {tok.size} entries, learned on both halves")
           PY
-        env:
-          TOK_FROM: ${{ inputs.tokenizer-from }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write the initial weights both halves start from
+        run: |
+          python - <<'PY'
+          import sys, torch
+          sys.path.insert(0, "src")
+          from pathlib import Path
+          from moe_model import MoEConfig, MoELM
+          torch.manual_seed(20261106)     # one seed, so the shared parts begin equal
+          cfg = MoEConfig(vocab=8192, dim=512, layers=8, heads=8, seq_len=256,
+                          experts=32, top_k=2, ffn_mult=4)
+          m = MoELM(cfg)
+          c = cfg.counts()
+          Path("shared").mkdir(exist_ok=True)
+          torch.save({"model": m.state_dict(), "config": cfg.__dict__,
+                      "args": {"stage": "init", "seed": 20261106}},
+                     "shared/init.pt")
+          print(f"init: {c['total']:,} parameters, seed 20261106")
+          print(f"two of these transfer to {1_086_473_216:,}")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shared-setup
+          path: |
+            shared/
+            data/security/half_a_defend.txt
+            data/security/half_b_failures.txt
+            data/security/split_report.json
+          if-no-files-found: error
+
+  half:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        half: [a, b]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet numpy
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: shared-setup
 
       - name: Train this half
         run: |
-          HALF="${{ inputs.half }}"
+          HALF="${{ matrix.half }}"
           if [ "$HALF" = "a" ]; then CORPUS=data/security/half_a_defend.txt; else CORPUS=data/security/half_b_failures.txt; fi
-          TOKARG=""
-          if [ -f tok/tokenizer.json ]; then TOKARG="--tokenizer-from tok/tokenizer.json"; fi
+          echo "half $HALF on $(wc -c < $CORPUS) characters"
           python src/stream_train.py \
             --text "$CORPUS" \
             --out "runs/half_$HALF" \
+            --init-from shared/init.pt \
+            --tokenizer-from shared/tokenizer.json \
             --vocab 8192 \
-            $TOKARG \
             --dim 512 --layers 8 --heads 8 \
             --experts ${{ inputs.experts }} --top-k 2 --ffn-mult 4 \
             --seq-len 256 --batch ${{ inputs.batch }} \
@@ -135,14 +160,57 @@ jobs:
       - name: Report
         if: always()
         run: |
-          cat "runs/half_${{ inputs.half }}/stream_report.json" 2>/dev/null || echo "no report"
-          cat data/security/split_report.json 2>/dev/null || true
+          cat "runs/half_${{ matrix.half }}/stream_report.json" 2>/dev/null || echo "no report"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: moe-half-${{ inputs.half }}
-          path: |
-            runs/half_${{ inputs.half }}/
-            data/security/split_report.json
+          name: half-${{ matrix.half }}
+          path: runs/half_${{ matrix.half }}/
+          if-no-files-found: warn
+
+  merge:
+    needs: half
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --quiet numpy
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: half-*
+          path: halves
+      - uses: actions/download-artifact@v4
+        with:
+          name: shared-setup
+
+      - name: Transfer every parameter into one model
+        run: |
+          ls -R halves | head -30
+          A=$(find halves -name chat.pt | head -1)
+          B=$(find halves -name chat.pt | tail -1)
+          echo "A=$A"
+          echo "B=$B"
+          test -f "$A" || { echo "half A produced no checkpoint"; exit 1; }
+          test -f "$B" || { echo "half B produced no checkpoint"; exit 1; }
+          python src/merge_experts.py \
+            --base "$A" --incoming "$B" \
+            --out runs/merged/kavach_1b.pt \
+            --threshold 0.95 \
+            --average-shared \
+            --report runs/merged/merge_report.json
+          cat runs/merged/merge_report.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kavach-1b-merged
+          path: runs/merged/
           if-no-files-found: warn
