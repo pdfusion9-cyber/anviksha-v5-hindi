@@ -1,0 +1,62 @@
+name: kavach-model1-artifact-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      checkpoint_run_id:
+        description: "Successful five-copy merge run ID"
+        required: true
+        default: "42233090777"
+      max_new_tokens:
+        description: "Maximum tokens per smoke-test answer"
+        required: true
+        default: "24"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  artifact-inference-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: anviksha-safe-merge-20261106
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install CPU inference dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Download the exact merged Model 1 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: hindi-five-folded
+          path: model
+          run-id: \${{ inputs.checkpoint_run_id }}
+          github-token: \${{ secrets.GITHUB_TOKEN }}
+          repository: \${{ github.repository }}
+      - name: Inspect artifact files
+        run: |
+          find model -maxdepth 2 -type f -printf '%p %s bytes\n'
+          test -s model/hindi_five.pt
+          test -s model/tokenizer.json
+      - name: Run guarded Hindi-English smoke prompts
+        run: |
+          python src/evaluate_kavach_model1.py \
+            --checkpoint model/hindi_five.pt \
+            --tokenizer model/tokenizer.json \
+            --max-new-tokens "\${{ inputs.max_new_tokens }}" \
+            --out runs/kavach_model1_smoke.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kavach-model1-smoke-report
+          path: |
+            runs/kavach_model1_smoke.json
+            runs/kavach_model1_audit/
+          if-no-files-found: warn
