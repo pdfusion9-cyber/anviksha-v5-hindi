@@ -51,17 +51,35 @@ def resume(previous: Path, out: Path, vocab: int, dim: int, layers: int,
     got = dict(vocab=cfg.vocab, dim=cfg.dim, layers=cfg.layers, heads=cfg.heads,
                seq_len=cfg.seq_len, experts=cfg.experts, ffn_mult=cfg.ffn_mult)
     if want != got:
-        raise SystemExit(
-            f"the checkpoint does not match the configuration this segment "
-            f"would train.\n  checkpoint {got}\n  this run   {want}\n"
-            f"Continuing would load weights into a differently shaped model.")
+        # the one difference that can be resolved without losing work
+        differs_only_in_experts = (
+            {k: v for k, v in want.items() if k != "experts"} ==
+            {k: v for k, v in got.items() if k != "experts"})
+        if differs_only_in_experts and want["experts"] > got["experts"]:
+            print(f"the checkpoint holds {got['experts']} experts and this run "
+                  f"wants {want['experts']}; growing it, keeping every trained "
+                  f"expert and adding the rest fresh")
+            from expand_experts import expand
+            grown = out.parent / "grown.pt"
+            expand(previous, grown, want["experts"])
+            shutil.copyfile(grown, out)
+            st = torch.load(out, weights_only=False)
+        else:
+            raise SystemExit(
+                f"the checkpoint does not match the configuration this segment "
+                f"would train.\n  checkpoint {got}\n  this run   {want}\n"
+                f"Continuing would load weights into a differently shaped model.")
+    else:
+        shutil.copyfile(previous, out)
     if not st.get("optimiser"):
         print("  WARNING: this checkpoint carries no optimiser state, so AdamW "
               "restarts its moments. Training will still work but the first "
               "steps of this segment are wasted re-learning them.")
 
     out.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(previous, out)
+    if not out.exists():
+        shutil.copyfile(previous, out)
+    st = torch.load(out, weights_only=False)
     e = st.get("extra", {})
     print(f"resuming from {previous}")
     print(f"  step {st.get('step', 0):,}, tokens {e.get('tokens_seen', 0):,}, "

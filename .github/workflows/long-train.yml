@@ -112,12 +112,12 @@ jobs:
           # was never found. The logic is in segment_setup.py now.
           if [ -n "$PREV" ]; then
             python src/segment_setup.py --out shared/init.pt --previous "$PREV" \
-              --vocab 8192 --dim 384 --layers 8 --heads 6 --experts 12 \
+              --vocab 8192 --dim 384 --layers 8 --heads 6 --experts 22 \
               --ffn 4 --seq-len 256
             INITARG="--init-from shared/init.pt --resume"
           else
             python src/segment_setup.py --out shared/init.pt \
-              --vocab 8192 --dim 384 --layers 8 --heads 6 --experts 12 \
+              --vocab 8192 --dim 384 --layers 8 --heads 6 --experts 22 \
               --ffn 4 --seq-len 256
             INITARG="--init-from shared/init.pt"
           fi
@@ -131,7 +131,7 @@ jobs:
             --tokenizer-from shared/tokenizer.json \
             --vocab 8192 \
             --dim 384 --layers 8 --heads 6 \
-            --experts 12 --top-k 2 --ffn-mult 4 \
+            --experts 22 --top-k 2 --ffn-mult 4 \
             --seq-len 256 --batch 8 \
             --dtype fp32 --threads 4 \
             --clock-budget-minutes ${{ inputs.minutes }} \
