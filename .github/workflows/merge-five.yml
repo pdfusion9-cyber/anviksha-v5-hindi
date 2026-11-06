@@ -36,38 +36,27 @@ jobs:
           python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Bring the five copies down
+        uses: actions/download-artifact@v4
+        with:
+          pattern: copy-*
+          path: copies
+          run-id: ${{ inputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+
+      - name: Bring the shared tokenizer down
+        uses: actions/download-artifact@v4
+        with:
+          name: five-shared
+          path: sharedroot
+          run-id: ${{ inputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+
+      - name: Show what arrived
         run: |
-          python - <<'PY'
-          import json, os, subprocess, urllib.request
-          run_id = os.environ["RUN_ID"]
-          repo = os.environ["GITHUB_REPOSITORY"]
-          tok = os.environ["GH_TOKEN"]
-          url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/artifacts"
-          req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"})
-          arts = json.loads(urllib.request.urlopen(req).read())["artifacts"]
-          want = [a for a in arts if a["name"].startswith("copy-")]
-          print(f"artifacts: {[a['name'] for a in want]}")
-          if len(want) < 2:
-              raise SystemExit(f"only {len(want)} copy artifacts; need at least 2")
-          for a in want:
-              req = urllib.request.Request(a["archive_download_url"],
-                                           headers={"Authorization": f"Bearer {tok}"})
-              blob = urllib.request.urlopen(req).read()
-              name = f"{a['name']}.zip"
-              open(name, "wb").write(blob)
-              subprocess.run(["unzip", "-o", "-q", name, "-d", a["name"]], check=True)
-              print(f"  {a['name']}: {len(blob)/1e6:.0f} MB")
-          shared = [a for a in arts if a["name"] == "five-shared"]
-          if shared:
-              req = urllib.request.Request(shared[0]["archive_download_url"],
-                                           headers={"Authorization": f"Bearer {tok}"})
-              open("shared.zip", "wb").write(urllib.request.urlopen(req).read())
-              subprocess.run(["unzip", "-o", "-q", "shared.zip", "-d", "sharedroot"],
-                             check=True)
-          PY
-        env:
-          RUN_ID: ${{ inputs.run-id }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          find copies sharedroot -maxdepth 3 -type f | head -20
+          echo "checkpoints: $(find copies -name chat.pt | wc -l)"
 
       - name: Fold them into one
         run: |
