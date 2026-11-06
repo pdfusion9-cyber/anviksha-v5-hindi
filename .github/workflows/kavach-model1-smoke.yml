@@ -1,6 +1,13 @@
 name: kavach-model1-artifact-smoke
 
 on:
+  push:
+    branches:
+      - anviksha-safe-merge-20261106
+    paths:
+      - ".github/workflows/kavach-model1-smoke.yml"
+      - "src/kavach_model1.py"
+      - "src/evaluate_kavach_model1.py"
   workflow_dispatch:
     inputs:
       checkpoint_run_id:
