@@ -8,11 +8,12 @@ on:
       - ".github/workflows/kavach-runner-diagnostic.yml"
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   runner-startup:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Prove hosted runner started
@@ -28,3 +29,4 @@ jobs:
           python --version
           git --version
           echo "KAVACH_RUNNER_DIAGNOSTIC=PASS"
+          echo "KAVACH_RUNNER_DIAGNOSTIC=END"
