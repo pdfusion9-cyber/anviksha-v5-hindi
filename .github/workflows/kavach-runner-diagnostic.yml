@@ -1,0 +1,30 @@
+name: kavach-runner-diagnostic
+
+on:
+  push:
+    branches:
+      - anviksha-safe-merge-20261106
+    paths:
+      - ".github/workflows/kavach-runner-diagnostic.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  runner-startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Prove hosted runner started
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "KAVACH_RUNNER_DIAGNOSTIC=STARTED"
+          echo "RUNNER_OS=$RUNNER_OS"
+          echo "RUNNER_ARCH=$RUNNER_ARCH"
+          echo "RUNNER_NAME=$RUNNER_NAME"
+          id
+          uname -a
+          python --version
+          git --version
+          echo "KAVACH_RUNNER_DIAGNOSTIC=PASS"
