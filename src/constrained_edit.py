@@ -146,7 +146,7 @@ def gradient_for(model, tokenizer, cfg, pairs):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", type=Path, default=Path("runs/tiny/chat.pt"))
-    ap.add_argument("--chat", type=Path, default=Path("data/tiny_train.jsonl"))
+    ap.add_argument("--chat", type=Path, default=Path("data/multi_train.jsonl"))
     ap.add_argument("--probe", type=int, default=200,
                     help="probe examples; the flip came from using one")
     ap.add_argument("--fractions", default="0.0016,0.016,0.05,0.10")
@@ -192,7 +192,10 @@ def main() -> None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps({
             "checkpoint": str(args.checkpoint),
-            "baseline": {"group_a": base_a, "group_b": 0.0,
+            # base_a was never assigned -- the name came from an earlier draft.
+            # The baseline for group A is by construction 1.0 here: group A is the
+            # pairs that already pass.
+            "baseline": {"group_a": 1.0, "group_b": 0.0,
                          "sizes": {"a": len(good), "b": 0}},
             "verdict": "nothing to repair: training data is already fitted",
         }, indent=2), encoding="utf-8")

@@ -69,7 +69,7 @@ def score(prompt: str, reply: str, reference: str | None) -> tuple[float, dict]:
     """Gate first, score second. A reply that fails any gate scores at most 30,
     so a wrong answer cannot average its way past the threshold on good form."""
     verdict = judge(prompt, reply, reference)
-    if verdict.passed and not check_rules(text).passed:
+    if verdict.passed and not check_rules(reply).passed:
         verdict.passed = False
         verdict.reasons.append('rules: grammar violation')
     return verdict.score, {
