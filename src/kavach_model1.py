@@ -8,6 +8,7 @@ model has passed a quality benchmark.
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 from pathlib import Path
 
@@ -17,6 +18,43 @@ from kavach import Kavach
 from moe_model import MoEConfig, MoELM
 from bpe_tokenizer import load_any
 from tokenizer import language_tag
+
+
+def utf8_valid_token_mask(tokenizer, generated: list[int], device):
+    """Mask BPE tokens that would make the generated UTF-8 byte stream invalid.
+
+    Incomplete multi-byte characters are allowed while generation continues;
+    EOS is allowed only when the byte stream ends at a character boundary.
+    Special tokens other than EOS are never emitted as user-facing text.
+    """
+    import torch
+
+    vocab_size = tokenizer.size
+    mask = torch.zeros(vocab_size, dtype=torch.bool, device=device)
+    if not hasattr(tokenizer, "token_bytes"):
+        return mask
+
+    decoder = codecs.getincrementaldecoder("utf-8")("strict")
+    try:
+        for token_id in generated:
+            decoder.decode(tokenizer.token_bytes(token_id), final=False)
+    except (UnicodeDecodeError, ValueError):
+        return mask
+
+    pending = decoder.getstate()[0]
+    for token_id in range(tokenizer.base):
+        state = decoder.getstate()
+        try:
+            decoder.decode(tokenizer.token_bytes(token_id), final=False)
+            mask[token_id] = True
+        except UnicodeDecodeError:
+            pass
+        finally:
+            decoder.setstate(state)
+
+    if not pending:
+        mask[tokenizer.eos] = True
+    return mask
 
 
 class KavachModel1:
@@ -81,7 +119,12 @@ class KavachModel1:
         for _ in range(max_new_tokens):
             if tokens.shape[1] >= self.config.seq_len:
                 break
-            logits = self.model(tokens)[:, -1, :]
+            logits = self.model(tokens)[:, -1, :].squeeze(0)
+            if hasattr(self.tokenizer, "token_bytes"):
+                valid = utf8_valid_token_mask(self.tokenizer, generated, logits.device)
+                if not bool(valid.any()):
+                    break
+                logits = logits.masked_fill(~valid, float("-inf"))
             nxt = int(torch.argmax(logits, dim=-1).item())
             generated.append(nxt)
             tokens = torch.cat([tokens, torch.tensor([[nxt]], dtype=torch.long)], dim=1)
