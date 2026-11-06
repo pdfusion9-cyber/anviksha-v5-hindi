@@ -65,7 +65,7 @@ jobs:
           COUNT=$(printf "%s\n" "$FOUND" | grep -c . || true)
           echo "checkpoints found: $COUNT"
           printf "%s\n" "$FOUND"
-          [ "$COUNT" -ge 2 ] || { echo "a transfer needs at least two"; exit 1; }
+          [ "$COUNT" -eq 5 ] || { echo "expected exactly five checkpoints"; exit 1; }
 
           # the tokenizer: take it from the shared bundle if present, else from
           # any copy, and never copy a file onto itself
@@ -78,11 +78,14 @@ jobs:
           cp "$BASE" work/acc.pt
           cp "$TOK" work/tok.json
 
+          MERGED_COPIES=1
           for NEXT in $(printf "%s\n" "$FOUND" | tail -n +2); do
-            echo "=== folding $(dirname "$NEXT") ==="
+            echo "=== folding $(dirname "$NEXT"); base represents $MERGED_COPIES copies ==="
             python src/merge_experts.py --base work/acc.pt --incoming "$NEXT" \
-              --out work/next.pt --threshold 0.999 --average-shared
+              --out work/next.pt --threshold 1.01 --average-shared \
+              --base-copies "$MERGED_COPIES"
             mv work/next.pt work/acc.pt
+            MERGED_COPIES=$((MERGED_COPIES + 1))
           done
 
           cp work/acc.pt out/hindi_five.pt
@@ -91,14 +94,27 @@ jobs:
           import json, sys, torch
           sys.path.insert(0, "src")
           from pathlib import Path
-          from moe_model import MoEConfig
-          st = torch.load("out/hindi_five.pt", weights_only=False)
+          from moe_model import MoEConfig, MoELM
+          st = torch.load("out/hindi_five.pt", map_location="cpu", weights_only=False)
           cfg = MoEConfig(**st["config"])
-          c = cfg.counts()
-          print(f"\nMERGED: {c['total']:,} parameters, {c['active']:,} active")
-          print(f"experts: {cfg.experts}")
+          counts = cfg.counts()
+          with torch.device("meta"):
+              model = MoELM(cfg)
+          model.load_state_dict(st["model"], strict=True, assign=True)
+          model.head.weight = model.embed.weight
+          model.eval()
+          tokens = torch.randint(0, cfg.vocab, (1, min(8, cfg.seq_len)))
+          with torch.inference_mode():
+              logits = model(tokens)
+          assert logits.shape == (1, tokens.shape[1], cfg.vocab)
+          assert torch.isfinite(logits).all(), "non-finite logits"
+          actual = sum(p.numel() for p in model.parameters())
+          assert actual == counts["total"], (actual, counts["total"])
+          print(f"\nMERGED: {actual:,} unique parameters, {counts['active']:,} active")
+          print(f"experts per layer: {cfg.experts}; strict load + finite forward: PASS")
           Path("out/summary.json").write_text(json.dumps(
-              {"config": cfg.__dict__, **c}, indent=2))
+              {"config": cfg.__dict__, **counts, "actual_unique_parameters": actual,
+               "strict_state_dict_load": True, "finite_forward": True}, indent=2))
           PY
 
       - uses: actions/upload-artifact@v4
