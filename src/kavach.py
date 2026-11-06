@@ -141,10 +141,10 @@ class Kavach:
         low = text.strip().lower()
         english = re.match(
             r"^(what|how|why|where|when|which|who|is|are|does|do|can|could|"
-            r"should|explain|describe|tell me)\\b", low)
+            r"should|explain|describe|tell me)\b", low)
         indic = re.search(
             r"(क्या|कैसे|क्यों|कहाँ|कब|कौन|किस|किसे|बताइए|समझाइए|"
-            r"\\bkya\\b|\\bkaise\\b|\\bkyun\\b|\\bkahan\\b|\\bkab\\b|\\bkaun\\b)",
+            r"\bkya\b|\bkaise\b|\bkyun\b|\bkahan\b|\bkab\b|\bkaun\b)",
             low)
         return low.endswith(("?", "？")) and bool(english or indic)
 
