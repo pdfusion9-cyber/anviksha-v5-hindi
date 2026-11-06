@@ -23,7 +23,9 @@ class KavachModel1:
     def __init__(self, checkpoint: Path, tokenizer_path: Path | None = None,
                  audit_dir: Path | None = None, threads: int = 2):
         torch.set_num_threads(threads)
-        state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        # Memory-map checkpoint tensors and construct the module on meta to
+        # avoid holding checkpoint + randomly initialized model copies at once.
+        state = torch.load(checkpoint, map_location="cpu", weights_only=False, mmap=True)
         if "model" not in state or "config" not in state:
             raise ValueError("checkpoint must contain model and config")
         self.config = MoEConfig(**state["config"])
@@ -32,9 +34,17 @@ class KavachModel1:
         if self.tokenizer.size != self.config.vocab:
             raise ValueError(
                 f"tokenizer size {self.tokenizer.size} != model vocab {self.config.vocab}")
-        self.model = MoELM(self.config)
-        self.model.load_state_dict(state["model"], strict=True)
+        with torch.device("meta"):
+            self.model = MoELM(self.config)
+        self.model.load_state_dict(state["model"], strict=True, assign=True)
+        self.model.head.weight = self.model.embed.weight
+        actual = sum(p.numel() for p in self.model.parameters())
+        expected = self.config.counts()["total"]
+        if actual != expected or actual != 574_391_040:
+            raise ValueError(
+                f"unexpected parameter count: actual={actual}, expected={expected}")
         self.model.eval()
+        del state
         self.guard = Kavach(
             "cybersecurity_assistant",
             state_dir=audit_dir,
