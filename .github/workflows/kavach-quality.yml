@@ -7,14 +7,16 @@ on:
     paths:
       - "src/kavach.py"
       - "src/kavach_model1.py"
-      - "src/moe_sft.py"\n      - "src/evaluate_kavach_model1.py"
+      - "src/moe_sft.py"
+      - "src/evaluate_kavach_model1.py"
       - "src/security_agent.py"
       - "src/capability_policy.py"
       - "src/kavach_sandbox.py"
       - "src/pii_india.py"
       - "tests/test_kavach_policy.py"
       - "tests/test_kavach_model1.py"
-      - "tests/test_moe_sft.py"\n      - "tests/test_model1_output_quality.py"
+      - "tests/test_moe_sft.py"
+      - "tests/test_model1_output_quality.py"
       - "src/test_security_agent.py"
       - ".github/workflows/kavach-quality.yml"
   workflow_dispatch:
