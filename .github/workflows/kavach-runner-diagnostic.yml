@@ -21,6 +21,7 @@ jobs:
         run: |
           set -euxo pipefail
           echo "KAVACH_RUNNER_DIAGNOSTIC=STARTED"
+          echo "PUBLIC_REPOSITORY_RECHECK=20261106"
           echo "RUNNER_OS=$RUNNER_OS"
           echo "RUNNER_ARCH=$RUNNER_ARCH"
           echo "RUNNER_NAME=$RUNNER_NAME"
