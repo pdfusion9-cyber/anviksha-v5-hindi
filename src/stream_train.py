@@ -34,7 +34,16 @@ def load_blocklist(path: Path) -> list[str]:
     return [t.lower() for t in d.get("terms", []) if t]
 
 
+MAX_DOC_CHARS = 4_000_000
+
+
 def blocked(text: str, terms: list[str]) -> bool:
+    if not terms:
+        return False
+    # a document larger than this is a reading fault, not a document. Filtering
+    # it would allocate a second copy of it and that is how the run died.
+    if len(text) > MAX_DOC_CHARS:
+        return True
     low = text.lower()
     return any(t in low for t in terms)
 
@@ -58,17 +67,15 @@ def stream_documents(path: Path, limit: int | None = None):
                     if isinstance(v, str) and v.strip():
                         yield v.strip()
     else:
-        buf = []
+        # One document per line, which is how fetch_hplt writes the corpus:
+        # `text.replace("\n", " ") + "\n"`. The first version split on blank
+        # lines instead, so a corpus with no blank lines was read as one 2 GB
+        # document and text.lower() raised MemoryError.
         with path.open(encoding="utf-8", errors="replace") as f:
             for line in f:
-                line = line.rstrip("\n")
+                line = line.strip()
                 if line:
-                    buf.append(line)
-                elif buf:
-                    yield "\n".join(buf)
-                    buf = []
-        if buf:
-            yield "\n".join(buf)
+                    yield line
 
 
 class WindowStream:
