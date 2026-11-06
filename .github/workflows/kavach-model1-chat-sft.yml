@@ -1,0 +1,118 @@
+name: kavach-model1-chat-sft
+
+# Supervised chat adaptation is a separate candidate. The merged base artifact
+# remains immutable; only the candidate is evaluated by the guarded smoke job.
+on:
+  workflow_dispatch:
+    inputs:
+      base_run_id:
+        description: "successful merge-five run containing hindi_five.pt and tokenizer.json"
+        required: true
+        default: "42233090777"
+      steps:
+        description: "answer-only SFT optimizer steps"
+        required: true
+        default: "120"
+      learning_rate:
+        description: "conservative SFT learning rate"
+        required: true
+        default: "0.00002"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  chat-sft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: anviksha-safe-merge-20261106
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install training dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pyarrow
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Download immutable merged base
+        uses: actions/download-artifact@v4
+        with:
+          name: hindi-five-folded
+          path: base
+          run-id: ${{ inputs.base_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Verify base and tokenizer
+        run: |
+          test -s base/hindi_five.pt
+          test -s base/tokenizer.json
+          sha256sum base/hindi_five.pt base/tokenizer.json | tee base/source.sha256
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s = json.loads(Path("base/summary.json").read_text())
+          assert s.get("strict_state_dict_load") is True
+          assert s.get("finite_forward") is True
+          assert s.get("actual_unique_parameters") == 574391040
+          print("base verified:", s["actual_unique_parameters"], "parameters")
+          PY
+      - name: Build licensed Hindi instruction train and held-out sets
+        run: |
+          python src/fetch_multi.py --out data --heldout 500 --cap 12000
+          test -s data/multi_train.jsonl
+          test -s data/multi_heldout.jsonl
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          train = [json.loads(x) for x in Path("data/multi_train.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+          held = [json.loads(x) for x in Path("data/multi_heldout.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+          assert len(train) >= 100, f"too few training pairs: {len(train)}"
+          assert len(held) >= 100, f"too few held-out pairs: {len(held)}"
+          train_ids = {x["user"][:100] for x in train}
+          held_ids = {x["user"][:100] for x in held}
+          assert not train_ids & held_ids, "train/held-out prompt overlap"
+          print(f"licensed pairs: train={len(train)}, heldout={len(held)}, overlap=0")
+          PY
+      - name: Run answer-only supervised chat fine-tuning
+        run: |
+          python src/moe_sft.py \
+            --checkpoint base/hindi_five.pt \
+            --tokenizer base/tokenizer.json \
+            --train data/multi_train.jsonl \
+            --heldout data/multi_heldout.jsonl \
+            --out runs/kavach_model1_chat_sft.pt \
+            --report runs/kavach_model1_chat_sft.json \
+            --steps "${{ inputs.steps }}" \
+            --learning-rate "${{ inputs.learning_rate }}" \
+            --batch-size 1 --max-seq-len 256 --max-answer-tokens 96 \
+            --eval-limit 32 --threads 2
+      - name: Verify base remains unchanged and candidate is loadable
+        run: |
+          sha256sum -c base/source.sha256
+          test -s runs/kavach_model1_chat_sft.pt
+          python - <<'PY'
+          import json, torch
+          from pathlib import Path
+          r=json.loads(Path("runs/kavach_model1_chat_sft.json").read_text())
+          assert r["source_checkpoint_preserved"] is True
+          assert r["answer_only_loss"] is True
+          assert r["usable_pairs"] >= 100
+          print("heldout before:", r["heldout_answer_loss_before"])
+          print("heldout after:", r["heldout_answer_loss_after"])
+          print("candidate:", r["parameters"], "parameters")
+          PY
+      - name: Upload candidate and SFT report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kavach-model1-chat-sft-candidate
+          path: |
+            runs/kavach_model1_chat_sft.pt
+            runs/kavach_model1_chat_sft.json
+            base/source.sha256
+            data/multi_manifest.json
+          if-no-files-found: warn
