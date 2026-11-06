@@ -95,13 +95,16 @@ def layer_count(state: dict) -> int:
 
 def merge(base_path: Path, incoming_path: Path, out_path: Path,
           threshold: float = 0.80, max_new: int | None = None,
-          verbose: bool = True, average_shared: bool = False) -> dict:
+          verbose: bool = True, average_shared: bool = False,
+          base_copies: int = 1) -> dict:
     base = torch.load(base_path, weights_only=False)
     inc = torch.load(incoming_path, weights_only=False)
 
     sa, sb = base["model"], inc["model"]
 
     # ---- refuse before writing anything -----------------------------------
+    if base_copies < 1:
+        raise ValueError("base_copies must be >= 1")
     problems = check_compatible(sa, sb)
     if problems:
         raise SystemExit("cannot merge:\n  " + "\n  ".join(problems))
@@ -132,8 +135,9 @@ def merge(base_path: Path, incoming_path: Path, out_path: Path,
             if (key in sb and ".moe.experts." not in key
                     and ".moe.router." not in key
                     and tensor.shape == sb[key].shape):
-                merged[key] = (tensor.float() + sb[key].float()).div(2).to(
-                    tensor.dtype)
+                merged[key] = (tensor.float() * base_copies
+                               + sb[key].float()).div(base_copies + 1).to(
+                                   tensor.dtype)
                 averaged += 1
 
     report = {
@@ -178,9 +182,11 @@ def merge(base_path: Path, incoming_path: Path, out_path: Path,
         router_key = f"blocks.{layer}.moe.router.weight"
         old_router = sa[router_key]
         if added:
-            mean_row = old_router.mean(dim=0, keepdim=True)
+            incoming_rows = sb[router_key][keep].clone()
+            if incoming_rows.shape[0] != added:
+                raise AssertionError("selected experts and router rows disagree")
             merged[router_key] = torch.cat(
-                [old_router.clone(), mean_row.repeat(added, 1)], dim=0)
+                [old_router.clone(), incoming_rows], dim=0)
         else:
             merged[router_key] = old_router.clone()
 
@@ -236,6 +242,9 @@ def main() -> None:
                          "base's copy. For two hats of one model the shared parts "
                          "were learned from different material by each half and "
                          "neither is wrong.")
+    ap.add_argument("--base-copies", type=int, default=1,
+                    help="number of equal-weight copies already represented by base; "
+                         "use 1,2,3,4 for a five-copy fold.")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what would happen, write nothing")
     args = ap.parse_args()
@@ -255,7 +264,7 @@ def main() -> None:
         return
 
     r = merge(args.base, args.incoming, args.out, args.threshold, args.max_new,
-              average_shared=args.average_shared)
+              average_shared=args.average_shared, base_copies=args.base_copies)
     print(f"\nexperts {r['experts_base']} + {r['experts_added']} new "
           f"- {r['experts_dropped_as_duplicate']} duplicates = {r['experts_final']}")
     if r['experts_dropped_as_duplicate'] > r['experts_added']:
