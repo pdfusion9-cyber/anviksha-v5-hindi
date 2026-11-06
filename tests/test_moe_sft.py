@@ -41,7 +41,7 @@ def test_sft_example_masks_prompt_and_trains_answer_plus_eos():
     assert example["tokens"][-1] == tok.stoi["<eos>"]
     assert example["loss_mask"][:prefix_length - 1] == [0] * (prefix_length - 1)
     assert example["loss_mask"][prefix_length - 1:] == [1] * (
-        len(example["tokens"]) - prefix_length + 1
+        len(example["tokens"]) - prefix_length
     )
 
 
