@@ -37,9 +37,9 @@ jobs:
         with:
           name: hindi-five-folded
           path: model
-          run-id: \${{ inputs.checkpoint_run_id }}
-          github-token: \${{ secrets.GITHUB_TOKEN }}
-          repository: \${{ github.repository }}
+          run-id: ${{ inputs.checkpoint_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
       - name: Inspect artifact files
         run: |
           find model -maxdepth 2 -type f -printf '%p %s bytes\n'
@@ -50,7 +50,7 @@ jobs:
           python src/evaluate_kavach_model1.py \
             --checkpoint model/hindi_five.pt \
             --tokenizer model/tokenizer.json \
-            --max-new-tokens "\${{ inputs.max_new_tokens }}" \
+            --max-new-tokens "${{ inputs.max_new_tokens }}" \
             --out runs/kavach_model1_smoke.json
       - uses: actions/upload-artifact@v4
         if: always()
