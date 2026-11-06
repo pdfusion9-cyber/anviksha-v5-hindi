@@ -103,47 +103,26 @@ jobs:
           PREV=""
           if [ -n "${{ inputs.resume-run-id }}" ]; then
             PREV=$(find prev -name chat.pt | head -1 || true)
+            echo "previous checkpoint: ${PREV:-none found}"
           fi
 
+          # The heredocs that used to live here broke the shell: a terminator
+          # inside an if-branch has to start at column zero, and the indented one
+          # was never found. The logic is in segment_setup.py now.
           if [ -n "$PREV" ]; then
-            echo "resuming from $PREV"
-            python - <<PY
-            import json, torch
-            from pathlib import Path
-            st = torch.load("$PREV", weights_only=False)
-            e = st.get("extra", {})
-            print(f"previous: step {st.get('step', 0):,}, "
-                  f"tokens {e.get('tokens_seen', 0):,}")
-            Path("shared").mkdir(exist_ok=True)
-            torch.save(st, "shared/init.pt")
-            PY
+            python src/segment_setup.py --out shared/init.pt --previous "$PREV" \
+              --vocab 8192 --dim 384 --layers 8 --heads 6 --experts 12 \
+              --ffn 4 --seq-len 256
             INITARG="--init-from shared/init.pt --resume"
-            OUT="runs/copy_$C"
-            mkdir -p "$OUT"
-            cp "$PREV" "$OUT/chat.pt"
           else
-            echo "fresh start"
-            python - <<'PY'
-            import sys, torch
-            sys.path.insert(0, "src")
-            from pathlib import Path
-            from moe_model import MoEConfig, MoELM
-            torch.manual_seed(20261106)
-            cfg = MoEConfig(vocab=8192, dim=384, layers=8, heads=6, seq_len=256,
-                            experts=12, top_k=2, ffn_mult=4)
-            Path("shared").mkdir(exist_ok=True)
-            torch.save({"model": MoELM(cfg).state_dict(), "config": cfg.__dict__,
-                        "args": {"stage": "init", "seed": 20261106}},
-                       "shared/init.pt")
-            c = cfg.counts()
-            print(f"init: {c['total']:,} parameters, {c['active']:,} active")
-            PY
+            python src/segment_setup.py --out shared/init.pt \
+              --vocab 8192 --dim 384 --layers 8 --heads 6 --experts 12 \
+              --ffn 4 --seq-len 256
             INITARG="--init-from shared/init.pt"
-            OUT="runs/copy_$C"
           fi
 
-          # --tokens sets the budget this segment aims for; the clock is the
-          # hard stop. Both are reported, so a shortfall is visible.
+          OUT="runs/copy_$C"
+          mkdir -p "$OUT"
           python src/stream_train.py \
             --text "$CORPUS" \
             --out "$OUT" \
