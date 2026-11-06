@@ -44,7 +44,7 @@ jobs:
         with:
           name: hindi-five-folded
           path: model
-          run-id: ${{ inputs.checkpoint_run_id }}
+          run-id: ${{ github.event.inputs.checkpoint_run_id || '42233090777' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
       - name: Inspect artifact files
