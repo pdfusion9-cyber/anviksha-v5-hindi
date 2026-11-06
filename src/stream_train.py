@@ -208,9 +208,14 @@ def main() -> None:
     from bpe_tokenizer import BPETokenizer, load_any
     tok_path = args.out / "tokenizer.json"
     if args.tokenizer_from is not None:
-        src = args.tokenizer_from / "tokenizer.json"
+        src = (args.tokenizer_from if args.tokenizer_from.is_file()
+               else args.tokenizer_from / "tokenizer.json")
         if not src.is_file():
-            raise SystemExit(f"no tokenizer.json in {args.tokenizer_from}")
+            raise SystemExit(
+                f"--tokenizer-from {args.tokenizer_from} has no tokenizer. "
+                f"Falling back to a fresh one would give this half a different "
+                f"vocabulary from the other and the merge would combine "
+                f"parameters that mean different things.")
         args.out.mkdir(parents=True, exist_ok=True)
         tok_path.write_bytes(src.read_bytes())
         print(f"tokenizer: copied from {src} so this run can be merged with it")
