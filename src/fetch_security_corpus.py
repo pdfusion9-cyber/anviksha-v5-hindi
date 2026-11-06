@@ -59,8 +59,12 @@ def main() -> None:
     ap.add_argument("--doc-chars", type=int, default=4000,
                     help="characters kept per document. 1,500 threw away the "
                          "body of most security writing")
-    ap.add_argument("--stream-bytes", type=int, default=2_000_000_000,
-                    help="how much of the HPLT shard to read while filtering")
+    ap.add_argument("--stream-bytes", type=int, default=400_000_000,
+                    help="how much of each HPLT shard to read while filtering")
+    ap.add_argument("--max-shards", type=int, default=40,
+                    help="how many HPLT shards to walk. One shard holds only "
+                         "about ten thousand security documents, so the volume "
+                         "comes from the number of shards, not the size of one")
     args = ap.parse_args()
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
@@ -116,21 +120,36 @@ def main() -> None:
         fh.MAP_URL = fh.LANG_MAPS["eng_Latn"]
         urls = fh.fetch_map(fh.MAP_URL)
         target = [u for u in urls if re.search(rf"/{fh.BIN}_\d+\.jsonl\.zst$", u)]
-        if target:
-            kept = 0
-            for line, total in fh.stream_lines(target[0], args.stream_bytes):
-                try:
-                    rec = json.loads(line)
-                except Exception:
-                    continue
-                text = rec.get("text") or ""
-                if len(text) > 300 and looks_security(text):
-                    pairs.append({"user": "Summarise this security text.",
-                                  "assistant": text[:args.doc_chars]})
-                    kept += 1
-                if kept >= args.max_docs:
-                    break
-            print(f"  kept {kept:,} security documents from HPLT")
+        print(f"  {len(target)} shards available")
+        kept = 0
+        scanned = 0
+        for shard_index, shard in enumerate(target):
+            if kept >= args.max_docs:
+                break
+            print(f"  shard {shard_index}: {shard.rsplit('/', 1)[-1]}")
+            try:
+                for line, total in fh.stream_lines(shard, args.stream_bytes):
+                    scanned += 1
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    text = rec.get("text") or ""
+                    if len(text) > 300 and looks_security(text):
+                        pairs.append({"user": "Summarise this security text.",
+                                      "assistant": text[:args.doc_chars]})
+                        kept += 1
+                    if kept >= args.max_docs:
+                        break
+            except Exception as e:
+                print(f"    shard failed: {type(e).__name__}: {e}")
+                continue
+            print(f"    kept {kept:,} so far from {scanned:,} scanned")
+            if shard_index + 1 >= args.max_shards:
+                print(f"    stopping after {args.max_shards} shards")
+                break
+        print(f"  kept {kept:,} security documents from {scanned:,} scanned "
+              f"across {min(shard_index + 1, len(target))} shards")
     except Exception as e:
         print(f"  HPLT unavailable: {type(e).__name__}: {e}")
 
