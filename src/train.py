@@ -51,6 +51,24 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch", default=8, type=int)
     p.add_argument("--steps", default=600, type=int)
     p.add_argument("--lr", default=3e-4, type=float)
+    p.add_argument("--chat-lr-scale", default=0.5, type=float,
+                   help="chat lr as a fraction of --lr. Was hardcoded at 0.5.")
+    p.add_argument("--replay-fraction", default=0.0, type=float,
+                   help="fraction of each chat batch drawn from --replay-text. "
+                        "Measured need: the chat stage cost +0.68 nats of "
+                        "general Hindi, because nothing of the pretraining "
+                        "distribution was replayed.")
+    p.add_argument("--min-answer-chars", default=8, type=int,
+                   help="drop chat pairs whose answer is shorter than this; a "
+                        "one-word answer teaches nothing and was 0.7%% of the "
+                        "corpus at <10 chars")
+    p.add_argument("--content-filter", action="store_true",
+                   help="drop text matching the blocklist in "
+                        "rules/content_blocklist.json before training")
+    p.add_argument("--blocklist", default=Path("rules/content_blocklist.json"),
+                   type=Path)
+    p.add_argument("--replay-text", default=None, type=Path,
+                   help="pretraining corpus to replay from during chat")
     p.add_argument("--threads", default=2, type=int)
     p.add_argument("--time-budget", default=0.0, type=float)
     p.add_argument("--target-steps", default=0, type=int,
@@ -130,6 +148,24 @@ def save(model: HindiLM, tokenizer: CharTokenizer, path: Path, args) -> None:
     tokenizer.save(path.parent / "tokenizer.json")
 
 
+def load_blocklist(path: Path) -> list[str]:
+    import json as _json
+    if not path.is_file():
+        return []
+    d = _json.loads(path.read_text(encoding="utf-8"))
+    terms = list(d.get("terms", []))
+    return [t.lower() for t in terms if t]
+
+
+def filter_text(text: str, terms: list[str]) -> tuple[str, bool]:
+    """Drop a document containing a blocked term. Returns (text, dropped)."""
+    low = text.lower()
+    for t in terms:
+        if t in low:
+            return text, True
+    return text, False
+
+
 def combined_loss(logits, aux_logits, hidden_scale, x_targets, tokenizer, args,
                   weights=None, token_mask=None):
     """Main next-token loss plus the two brain-inspired penalties.
@@ -206,6 +242,19 @@ def main() -> None:
         if len(text) < 5000:
             raise SystemExit(f"corpus too small ({len(text)} chars); refusing to "
                              f"pretrain on a stub")
+        if args.content_filter:
+            terms = load_blocklist(args.blocklist)
+            kept_lines, dropped_lines = [], 0
+            for line in text.splitlines():
+                _, bad = filter_text(line, terms)
+                if bad:
+                    dropped_lines += 1
+                else:
+                    kept_lines.append(line)
+            text = "\n".join(kept_lines)
+            print(f"  content filter: dropped {dropped_lines:,} lines "
+                  f"matching {len(terms)} blocked terms")
+
         if args.tokenizer == "bpe":
             # 4096 total: 256 bytes + merges + the 13 specials
             tokenizer = BPETokenizer.train(text, vocab_size=4096)
@@ -221,6 +270,7 @@ def main() -> None:
 
         optimiser = torch.optim.AdamW(model.parameters(), lr=args.lr)
         rng = np.random.default_rng(0)
+        stats_p: dict[str, int] = {}
         started = time.time()
         step = 0
         # The clock budget must bound this loop. The chat stage already did that,
@@ -246,6 +296,16 @@ def main() -> None:
             optimiser.zero_grad()
             logits, aux_logits, hidden = model(x, return_aux=True)
             loss, _ = combined_loss(logits, aux_logits, hidden, y, tokenizer, args)
+            if not torch.isfinite(loss):
+                # Skip the step and say so. Continuing would write NaN into every
+                # weight, and the run would finish and save a checkpoint that
+                # cannot produce anything.
+                stats_p["nan_skipped"] = stats_p.get("nan_skipped", 0) + 1
+                if stats_p["nan_skipped"] in (1, 10, 100):
+                    print(f"  non-finite loss at step {step}; step skipped "
+                          f"({stats_p['nan_skipped']} so far)", flush=True)
+                optimiser.zero_grad()
+                continue
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimiser.step()
@@ -278,6 +338,19 @@ def main() -> None:
         )
         # honour the requested tokenizer here too: falling back to char silently
         # is how a --tokenizer bpe run trained a character model and nobody noticed
+        if args.content_filter:
+            terms = load_blocklist(args.blocklist)
+            kept_lines, dropped_lines = [], 0
+            for line in text.splitlines():
+                _, bad = filter_text(line, terms)
+                if bad:
+                    dropped_lines += 1
+                else:
+                    kept_lines.append(line)
+            text = "\n".join(kept_lines)
+            print(f"  content filter: dropped {dropped_lines:,} lines "
+                  f"matching {len(terms)} blocked terms")
+
         if args.tokenizer == "bpe":
             tokenizer = BPETokenizer.train(corpus, vocab_size=4096)
             print(f"  built bpe tokenizer from chat data: vocab {tokenizer.size}")
@@ -293,6 +366,19 @@ def main() -> None:
         model = load_model(args.out / "pretrain.pt", tokenizer, args)
     pairs = [json.loads(line) for line in
              Path(args.chat).read_text(encoding="utf-8").splitlines() if line.strip()]
+    before = len(pairs)
+    if args.content_filter:
+        terms = load_blocklist(args.blocklist)
+        pairs = [p for p in pairs
+                 if not filter_text(p["user"] + " " + p["assistant"], terms)[1]]
+        print(f"  content filter: {before - len(pairs):,} pairs dropped")
+    short = [p for p in pairs if len(p["assistant"].strip()) < args.min_answer_chars]
+    if short:
+        pairs = [p for p in pairs
+                 if len(p["assistant"].strip()) >= args.min_answer_chars]
+        print(f"  dropped {len(short):,} pairs with answers under "
+              f"{args.min_answer_chars} characters")
+
     report = model.parameters_report()
     print(f"{len(pairs)} chat pairs, vocab {tokenizer.size}, "
           f"parameters {report['parameters']:,}")
@@ -326,11 +412,35 @@ def main() -> None:
     else:
         weights = [1.0] * len(pairs)
 
+    stats = {"dropped_long": 0, "replay": 0}
+
+    # Replay pool. The chat stage sees only instruction pairs, so the model's
+    # distribution narrows to them and general Hindi degrades -- measured at
+    # +0.68 nats on held-out sentences. Mixing a fraction of pretraining text
+    # back in is the standard remedy and was simply missing.
+    replay_windows: list[list[int]] = []
+    if args.replay_fraction > 0:
+        if args.replay_text is None or not Path(args.replay_text).is_file():
+            raise SystemExit(
+                "--replay-fraction was set but --replay-text is missing or does "
+                "not exist; refusing to train without the data it asks for")
+        raw = Path(args.replay_text).read_text(encoding="utf-8", errors="replace")
+        raw = raw[: args.text_chars] if args.text_chars else raw
+        ids = tokenizer.encode(raw)
+        step = max(args.seq_len // 2, 1)
+        replay_windows = [ids[i:i + args.seq_len + 1]
+                          for i in range(0, max(len(ids) - args.seq_len - 1, 1), step)]
+        print(f"  replay pool: {len(replay_windows):,} windows from "
+              f"{args.replay_text} ({len(ids):,} tokens)")
+
     # hippocampal buffer: a small, fast store that keeps recent experiences and
     # replays them alongside fresh ones, so new material does not overwrite old
     hippocampus: list[int] = []
 
-    optimiser = torch.optim.AdamW(model.parameters(), lr=args.lr * 0.5)
+    optimiser = torch.optim.AdamW(model.parameters(),
+                                  lr=args.lr * args.chat_lr_scale)
+    print(f"  chat lr {args.lr * args.chat_lr_scale:.2e} "
+          f"({args.chat_lr_scale:g} x {args.lr:.2e})")
     rng = np.random.default_rng(1)
     loss_log: list[float] = []
 
@@ -348,12 +458,42 @@ def main() -> None:
                                         np.array([hippocampus[i] for i in replay])])
             rows = []
             masks = []
+            kept: list[int] = []
+            dropped_this_batch = 0
             for index in picks:
                 row = sequences[index][: args.seq_len]
                 start = answer_starts[index]
-                m = [0] * min(start, args.seq_len) + \
-                    [1] * max(0, min(len(sequences[index]), args.seq_len) - start)
-                m = m[: args.seq_len]
+                # If the answer begins past the window the mask is all zeros:
+                # the pair contributes no gradient, and with per-pair weighting
+                # it also averages a 0.0 into the loss, dragging it down and
+                # diluting every other pair in the batch. Neither is visible in
+                # the log. Such a pair is now skipped and counted.
+                if start >= args.seq_len:
+                    dropped_this_batch += 1
+                    m = None
+                else:
+                    m = [0] * min(start, args.seq_len) + \
+                        [1] * max(0, min(len(sequences[index]), args.seq_len) - start)
+                    m = m[: args.seq_len]
+                if m is None or sum(m) == 0:
+                    continue
+                rows.append(row + [tokenizer.pad] * (args.seq_len - len(row)))
+                masks.append(m + [0] * (args.seq_len - len(m)))
+                kept.append(int(index))
+            if args.replay_fraction > 0 and replay_windows:
+                take = int(args.batch * args.replay_fraction)
+                for _ in range(take):
+                    w = replay_windows[int(rng.integers(0, len(replay_windows)))]
+                    row = list(w[: args.seq_len])
+                    rows.append(row + [tokenizer.pad] * (args.seq_len - len(row)))
+                    # every token is supervised: this is language modelling, not
+                    # instruction following, so there is no question to mask
+                    masks.append([1] * len(row) + [0] * (args.seq_len - len(row)))
+                    stats["replay"] += 1
+            if dropped_this_batch:
+                stats["dropped_long"] += dropped_this_batch
+            if not rows:
+                continue
                 rows.append(row + [tokenizer.pad] * (args.seq_len - len(row)))
                 masks.append(m + [0] * (args.seq_len - len(m)))
             batch = np.array(rows, dtype=np.int64)
@@ -364,10 +504,23 @@ def main() -> None:
             y_mask = torch.from_numpy(mask_batch[:, 1:])
             optimiser.zero_grad()
             logits, aux_logits, hidden = model(x, return_aux=True)
-            batch_weights = torch.tensor([weights[int(i)] for i in picks])
+            n_replay = len(rows) - len(kept)
+            batch_weights = torch.tensor(
+                [weights[i] for i in kept] + [1.0] * max(n_replay, 0))
             loss, parts = combined_loss(logits, aux_logits, hidden, y, tokenizer,
                                         args, weights=batch_weights,
                                         token_mask=y_mask)
+            if not torch.isfinite(loss):
+                # Skip the step and say so. Continuing would write NaN into every
+                # weight, and the run would finish and save a checkpoint that
+                # cannot produce anything.
+                stats["nan_skipped"] = stats.get("nan_skipped", 0) + 1
+                if stats["nan_skipped"] in (1, 10, 100):
+                    print(f"  non-finite loss at step {step_offset + done + 1}; "
+                          f"step skipped ({stats['nan_skipped']} so far)",
+                          flush=True)
+                optimiser.zero_grad()
+                continue
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimiser.step()
@@ -395,9 +548,8 @@ def main() -> None:
     print(f"running {target:,} steps")
     remaining = max(target - 15, 0) if planned else target
     elapsed, done = run_steps(remaining, step_offset=15 if planned else 0)
-    print(f"completed {15 + done:,} steps in {elapsed:.0f}s")
-
-    total_steps = 15 + done
+    total_steps = 15 + done if planned else done
+    print(f"completed {total_steps:,} steps in {elapsed:.0f}s")
     per_step = elapsed / max(done, 1)
     eta = {
         "steps_completed": total_steps,

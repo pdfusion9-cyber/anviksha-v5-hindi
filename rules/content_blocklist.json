@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "note": "Terms that disqualify a document from training. The pretrain checkpoint completed 'भारत एक विशाल देश है' with inappropriate material from raw web text, and nothing sat between the corpus and the weights. This is a coarse list on purpose: a false drop costs one document, a false keep puts the text in the model.",
+  "terms": [
+    "सेक्स", "अश्लील", "पोर्न", "नग्न", "वेश्या", "sex", "porn", "nude",
+    "naked", "xxx", "rape", "बलात्कार", "fuck", "shit", "bitch",
+    "casino", "सट्टा", "betting", "gambling", "jua",
+    "viagra", "cialis", "pharmacy online", "weight loss pill",
+    "loan approved", "click here to win", "earn money fast",
+    "crypto giveaway", "free download crack", "keygen", "warez"
+  ]
+}
