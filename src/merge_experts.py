@@ -58,6 +58,14 @@ def check_compatible(a: dict, b: dict) -> list[str]:
         if ".moe.experts." in k:
             continue
         if a[k].shape != b[k].shape:
+            # The router is allowed to differ when the difference is exactly the
+            # expert count. Folding several copies in one at a time leaves the
+            # accumulator with more expert rows than the copy arriving next, and
+            # that is the normal case, not a mismatch.
+            if (".moe.router." in k and len(a[k].shape) == 2
+                    and a[k].shape[1] == b[k].shape[1]
+                    and a[k].shape[0] != b[k].shape[0]):
+                continue
             problems.append(f"shape mismatch on {k}: {tuple(a[k].shape)} vs "
                             f"{tuple(b[k].shape)}")
     return problems
@@ -160,7 +168,10 @@ def merge(base_path: Path, incoming_path: Path, out_path: Path,
             merged[router_key] = old_router.clone()
 
         dupes = nb - len(keep)
-        total_added += added
+        # count experts, not expert-layer pairs: the first layer's figure is the
+        # number of experts added, and every layer adds the same ones
+        if layer == 0:
+            total_added = added
         total_dupes += dupes
         report["per_layer"].append({
             "layer": layer, "base_experts": na, "incoming_experts": nb,

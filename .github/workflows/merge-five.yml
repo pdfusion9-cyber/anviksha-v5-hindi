@@ -1,0 +1,110 @@
+name: merge-five
+
+# Fold the five finished copies into one model, without retraining.
+#
+# The five-copy run trained all five successfully and then failed at the merge,
+# for a reason worth keeping: the check refused to combine an accumulator that
+# already held 24 experts with a copy that held 12, because their router shapes
+# differ. That difference is exactly what a merge produces, so folding several
+# in one at a time could never have worked. The check now allows a router that
+# differs by the expert count, and this workflow exists so the five checkpoints
+# that already exist do not have to be trained again to prove it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: "the moe-five run whose artifacts to fold"
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --quiet numpy
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Bring the five copies down
+        run: |
+          python - <<'PY'
+          import json, os, subprocess, urllib.request
+          run_id = os.environ["RUN_ID"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tok = os.environ["GH_TOKEN"]
+          url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/artifacts"
+          req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"})
+          arts = json.loads(urllib.request.urlopen(req).read())["artifacts"]
+          want = [a for a in arts if a["name"].startswith("copy-")]
+          print(f"artifacts: {[a['name'] for a in want]}")
+          if len(want) < 2:
+              raise SystemExit(f"only {len(want)} copy artifacts; need at least 2")
+          for a in want:
+              req = urllib.request.Request(a["archive_download_url"],
+                                           headers={"Authorization": f"Bearer {tok}"})
+              blob = urllib.request.urlopen(req).read()
+              name = f"{a['name']}.zip"
+              open(name, "wb").write(blob)
+              subprocess.run(["unzip", "-o", "-q", name, "-d", a["name"]], check=True)
+              print(f"  {a['name']}: {len(blob)/1e6:.0f} MB")
+          shared = [a for a in arts if a["name"] == "five-shared"]
+          if shared:
+              req = urllib.request.Request(shared[0]["archive_download_url"],
+                                           headers={"Authorization": f"Bearer {tok}"})
+              open("shared.zip", "wb").write(urllib.request.urlopen(req).read())
+              subprocess.run(["unzip", "-o", "-q", "shared.zip", "-d", "sharedroot"],
+                             check=True)
+          PY
+        env:
+          RUN_ID: ${{ inputs.run-id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fold them into one
+        run: |
+          FOUND=$(find . -name chat.pt | sort)
+          echo "$FOUND"
+          COUNT=$(echo "$FOUND" | wc -l)
+          [ "$COUNT" -ge 2 ] || { echo "only $COUNT checkpoints"; exit 1; }
+          TOK=$(find . -name tokenizer.json | head -1)
+          echo "tokenizer: $TOK"
+          mkdir -p work out
+          cp "$(echo "$FOUND" | head -1)" work/acc.pt
+          cp "$TOK" work/tokenizer.json
+          for NEXT in $(echo "$FOUND" | tail -n +2); do
+            echo "=== folding $(dirname $NEXT) ==="
+            python src/merge_experts.py --base work/acc.pt --incoming "$NEXT" \
+              --out work/next.pt --threshold 0.95 --average-shared
+            mv work/next.pt work/acc.pt
+          done
+          cp work/acc.pt out/hindi_five.pt
+          cp "$TOK" out/tokenizer.json
+          python - <<'PY'
+          import json, sys, torch
+          sys.path.insert(0, "src")
+          from pathlib import Path
+          from moe_model import MoEConfig
+          st = torch.load("out/hindi_five.pt", weights_only=False)
+          cfg = MoEConfig(**st["config"])
+          c = cfg.counts()
+          print(f"\nMERGED: {c['total']:,} parameters, {c['active']:,} active")
+          print(f"experts: {cfg.experts}")
+          Path("out/summary.json").write_text(json.dumps(
+              {"config": cfg.__dict__, **c}, indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hindi-five-folded
+          path: out/
+          if-no-files-found: warn
