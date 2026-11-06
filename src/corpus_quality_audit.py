@@ -17,8 +17,8 @@ DOMAIN_TERMS = {
     "governance": {"security policy","compliance","security audit","gdpr","iso 27001","nist","risk assessment","security control","framework","governance","privacy","consent","retention","data classification","standard","information security management"},
 }
 SPAM_RISK_TERMS = {"adult","casino","gambling","sportsbook","betting","slot machine","roulette","escort","hookup","porn","pornography","milf","dating site","free spins","online slots","jackpot"}
-URL_RE = re.compile(r"https?://\\S+|www\\.\\S+", re.I)
-EMAIL_RE = re.compile(r"\\b[\\w.+-]+@[\\w.-]+\\.[A-Za-z]{2,}\\b")
+URL_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
+EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 
 def iter_documents(path: Path):
     if path.suffix.lower()==".jsonl":
@@ -43,7 +43,7 @@ def language_counts(text):
     for ch in text:
         if ch.isalpha():
             letters+=1
-            if "\\u0900"<=ch<="\\u097f": dev+=1
+            if "\u0900"<=ch<="\u097f": dev+=1
             elif "A"<=ch<="Z" or "a"<=ch<="z": latin+=1
     n=max(letters,1)
     return {"letters":letters,"devanagari_letters":dev,"latin_letters":latin,"devanagari_pct":round(100*dev/n,4),"latin_pct":round(100*latin/n,4)}
@@ -75,7 +75,7 @@ def audit(path:Path,domain=None,min_domain_hits=2,sample_limit=30):
             flags.update(reasons)
             if len(samples)<sample_limit:
                 preview=URL_RE.sub("[URL]",EMAIL_RE.sub("[EMAIL]",text[:260]))
-                samples.append({"record":index,"reasons":reasons,"domain_hits":domain_hits[:12],"spam_risk_hits":spam_hits[:8],"preview":re.sub(r"\\s+"," ",preview)})
+                samples.append({"record":index,"reasons":reasons,"domain_hits":domain_hits[:12],"spam_risk_hits":spam_hits[:8],"preview":re.sub(r"\s+"," ",preview)})
     n=max(language["letters"],1)
     return {"input":str(path),"domain":domain,"documents":docs,"characters":total_chars,"unique_documents":docs-dupes,
       "exact_duplicate_documents":dupes,"short_documents_under_100_chars":shorts,"letters":language["letters"],
