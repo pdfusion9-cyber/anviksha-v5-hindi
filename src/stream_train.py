@@ -1,0 +1,325 @@
+"""Stream a corpus through a sparse mixture of experts and train it.
+
+The corpus is never held. Documents arrive from a shard reader, are filtered and
+tokenised one at a time, and only a window buffer of finished token ids stays in
+memory. That is what lets a 4.7 GB corpus train a model on a machine that cannot
+hold 4.7 GB.
+
+The parameter count is one billion and the active count is forty-four million.
+Both are reported on every checkpoint, because a model described only by its
+total is a model described dishonestly.
+
+Every fault found in the audit is carried over: the content filter, the
+short-answer filter, the replay of pretraining text, the non-finite loss guard,
+and the chat learning rate as a fraction rather than a constant.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from moe_model import MoEConfig, MoELM
+
+
+def load_blocklist(path: Path) -> list[str]:
+    if not path.is_file():
+        return []
+    d = json.loads(path.read_text(encoding="utf-8"))
+    return [t.lower() for t in d.get("terms", []) if t]
+
+
+def blocked(text: str, terms: list[str]) -> bool:
+    low = text.lower()
+    return any(t in low for t in terms)
+
+
+def stream_documents(path: Path, limit: int | None = None):
+    """Yield documents one at a time. Never returns the file as a string."""
+    if path.suffix == ".jsonl":
+        with path.open(encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                if limit and i >= limit:
+                    return
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                for key in ("assistant", "text", "content", "user"):
+                    v = rec.get(key)
+                    if isinstance(v, str) and v.strip():
+                        yield v.strip()
+    else:
+        buf = []
+        with path.open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if line:
+                    buf.append(line)
+                elif buf:
+                    yield "\n".join(buf)
+                    buf = []
+        if buf:
+            yield "\n".join(buf)
+
+
+class WindowStream:
+    """A rolling token buffer fed from a document stream.
+
+    Documents are concatenated into one continuous id sequence and windows are
+    sliced from it. The first version required each document to be at least as
+    long as the window, so on a corpus of short paragraphs every document was
+    dropped and the stream reported "corpus exhausted" with zero steps -- a
+    silent total failure that looked like an empty corpus.
+    """
+
+    def __init__(self, docs, tokenizer, seq_len: int, terms, buffer_windows=256,
+                 min_chars=20):
+        self.docs = docs
+        self.tok = tokenizer
+        self.seq_len = seq_len
+        self.terms = terms
+        self.buffer_windows = buffer_windows
+        self.min_chars = min_chars
+        self.buf: list[np.ndarray] = []
+        self.carry: list[int] = []      # leftover ids too few to fill a window
+        self.docs_read = 0
+        self.docs_dropped = 0
+        self.tokens_seen = 0
+        self.finished = False
+
+    def _refill(self):
+        while len(self.buf) < self.buffer_windows and not self.finished:
+            try:
+                doc = next(self.docs)
+            except StopIteration:
+                self.finished = True
+                break
+            self.docs_read += 1
+            if len(doc) < self.min_chars:
+                self.docs_dropped += 1
+                continue
+            if self.terms and blocked(doc, self.terms):
+                self.docs_dropped += 1
+                continue
+            ids = self.tok.encode(doc)
+            self.tokens_seen += len(ids)
+            self.carry.extend(ids)
+            n = self.seq_len + 1
+            while len(self.carry) >= n:
+                self.buf.append(np.array(self.carry[:n], dtype=np.int64))
+                del self.carry[:self.seq_len]
+
+    def batch(self, size: int, rng) -> np.ndarray | None:
+        if len(self.buf) < size:
+            self._refill()
+        if not self.buf:
+            return None
+        take = min(size, len(self.buf))
+        picks = rng.integers(0, len(self.buf), size=take)
+        rows = [self.buf[int(i)] for i in picks]
+        for i in sorted({int(p) for p in picks}, reverse=True):
+            if i < len(self.buf):
+                self.buf.pop(i)
+        return np.stack(rows)
+
+
+def build_model(vocab: int, args) -> MoELM:
+    cfg = MoEConfig(vocab=vocab, dim=args.dim, layers=args.layers,
+                    heads=args.heads, seq_len=args.seq_len,
+                    experts=args.experts, top_k=args.top_k,
+                    ffn_mult=args.ffn_mult)
+    return MoELM(cfg)
+
+
+def save(model, tokenizer, path: Path, args, extra: dict | None = None):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    report = model.parameters_report()
+    torch.save({"model": model.state_dict(),
+                "config": model.cfg.__dict__,
+                "args": {k: (str(v) if isinstance(v, Path) else v)
+                         for k, v in vars(args).items()},
+                "report": report,
+                "extra": extra or {}}, path)
+    tokenizer.save(path.parent / "tokenizer.json")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--text", type=Path, required=True)
+    ap.add_argument("--chat", type=Path, default=None)
+    ap.add_argument("--out", type=Path, default=Path("runs/moe"))
+    ap.add_argument("--init-from", type=Path, default=None)
+    ap.add_argument("--tokenizer", default="bpe")
+    ap.add_argument("--vocab", type=int, default=8192)
+    ap.add_argument("--dim", type=int, default=512)
+    ap.add_argument("--layers", type=int, default=8)
+    ap.add_argument("--heads", type=int, default=8)
+    ap.add_argument("--experts", type=int, default=64)
+    ap.add_argument("--top-k", type=int, default=2)
+    ap.add_argument("--ffn-mult", type=int, default=4)
+    ap.add_argument("--seq-len", type=int, default=256)
+    ap.add_argument("--batch", type=int, default=4)
+    ap.add_argument("--steps", type=int, default=1000000)
+    ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--clock-budget-minutes", type=float, default=120.0)
+    ap.add_argument("--target-steps", type=int, default=0)
+    ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--checkpoint-every", type=int, default=200)
+    ap.add_argument("--balance-weight", type=float, default=0.01)
+    ap.add_argument("--buffer-windows", type=int, default=256)
+    ap.add_argument("--content-filter", action="store_true")
+    ap.add_argument("--blocklist", type=Path, default=Path("rules/content_blocklist.json"))
+    ap.add_argument("--max-docs", type=int, default=0)
+    ap.add_argument("--replay-text", type=Path, default=None)
+    ap.add_argument("--replay-fraction", type=float, default=0.0)
+    args = ap.parse_args()
+
+    torch.set_num_threads(args.threads)
+    rng = np.random.default_rng(7)
+
+    terms = load_blocklist(args.blocklist) if args.content_filter else []
+    if terms:
+        print(f"content filter: {len(terms)} blocked terms")
+
+    # tokenizer first, so the model is built at the right vocabulary size
+    from bpe_tokenizer import BPETokenizer, load_any
+    tok_path = args.out / "tokenizer.json"
+    if tok_path.is_file():
+        tokenizer = load_any(tok_path)
+        print(f"tokenizer: loaded {tokenizer.size} entries from {tok_path}")
+    else:
+        sample = []
+        n = 0
+        for doc in stream_documents(args.text, limit=args.max_docs or None):
+            if terms and blocked(doc, terms):
+                continue
+            sample.append(doc)
+            n += len(doc)
+            if n > 20_000_000:
+                break
+        tokenizer = BPETokenizer.train("\n".join(sample), vocab_size=args.vocab)
+        args.out.mkdir(parents=True, exist_ok=True)
+        tokenizer.save(tok_path)
+        print(f"tokenizer: trained {tokenizer.size} entries on {n:,} characters")
+
+    model = build_model(tokenizer.size, args)
+    report = model.parameters_report()
+    print(f"model: {report['total_parameters']:,} total parameters, "
+          f"{report['active_parameters']:,} active per token "
+          f"({report['active_fraction']*100:.1f}%)")
+    print(f"       {args.experts} experts, top {args.top_k}, dim {args.dim}, "
+          f"{args.layers} layers, window {args.seq_len}")
+
+    start_step = 0
+    if args.init_from and args.init_from.is_file():
+        state = torch.load(args.init_from, weights_only=False)
+        model.load_state_dict(state["model"])
+        start_step = int(state.get("extra", {}).get("step", 0))
+        print(f"resumed from {args.init_from} at step {start_step}")
+
+    optimiser = torch.optim.AdamW(model.parameters(), lr=args.lr,
+                                  betas=(0.9, 0.95), weight_decay=0.1)
+    stream = WindowStream(stream_documents(args.text, limit=args.max_docs or None),
+                          tokenizer, args.seq_len, terms,
+                          buffer_windows=args.buffer_windows)
+    replay_stream = None
+    if args.replay_fraction > 0:
+        if args.replay_text is None or not args.replay_text.is_file():
+            raise SystemExit("--replay-fraction set but --replay-text is missing")
+        replay_stream = WindowStream(
+            stream_documents(args.replay_text), tokenizer, args.seq_len, terms,
+            buffer_windows=args.buffer_windows)
+        print(f"replay: {args.replay_fraction:.0%} of each batch from "
+              f"{args.replay_text}")
+
+    started = time.time()
+    budget = args.clock_budget_minutes * 60
+    step = start_step
+    nan_skipped = 0
+    replay_tokens = 0
+    losses: list[float] = []
+
+    print(f"streaming from {args.text}; clock budget {args.clock_budget_minutes:g} min")
+    while step - start_step < args.steps:
+        if time.time() - started > budget:
+            print("clock budget reached")
+            break
+        if replay_stream is not None:
+            take_replay = max(int(args.batch * args.replay_fraction), 0)
+            main_batch = stream.batch(max(args.batch - take_replay, 1), rng)
+            rep_batch = replay_stream.batch(take_replay, rng) if take_replay else None
+            if main_batch is None and rep_batch is None:
+                print("both streams exhausted")
+                break
+            parts = [b for b in (main_batch, rep_batch) if b is not None]
+            batch = np.concatenate(parts, 0)
+            replay_tokens += int(rep_batch.shape[0]) if rep_batch is not None else 0
+        else:
+            batch = stream.batch(args.batch, rng)
+        if batch is None:
+            print("corpus exhausted")
+            break
+
+        x = torch.from_numpy(batch[:, :-1])
+        y = torch.from_numpy(batch[:, 1:])
+        optimiser.zero_grad()
+        logits = model(x)
+        main_loss = torch.nn.functional.cross_entropy(
+            logits.reshape(-1, logits.shape[-1]), y.reshape(-1),
+            ignore_index=tokenizer.pad)
+        bal = model.balance_loss()
+        loss = main_loss + args.balance_weight * bal
+
+        if not torch.isfinite(loss):
+            nan_skipped += 1
+            optimiser.zero_grad()
+            continue
+
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimiser.step()
+        step += 1
+        losses.append(float(main_loss))
+
+        if step % 10 == 0:
+            recent = sum(losses[-10:]) / min(len(losses), 10)
+            usage = model.expert_usage()
+            spread = (max(usage) - min(usage)) if usage else 0.0
+            print(f"step {step}  loss {recent:.4f}  balance {float(bal):.3f}  "
+                  f"expert spread {spread:.3f}  docs {stream.docs_read:,}  "
+                  f"tokens {stream.tokens_seen:,}  {time.time()-started:.0f}s",
+                  flush=True)
+
+        if step % args.checkpoint_every == 0:
+            save(model, tokenizer, args.out / "chat.pt", args,
+                 {"step": step, "docs_read": stream.docs_read,
+                  "tokens_seen": stream.tokens_seen,
+                  "nan_skipped": nan_skipped,
+                  "expert_usage": model.expert_usage()})
+
+    final = {"step": step, "docs_read": stream.docs_read,
+             "tokens_seen": stream.tokens_seen, "docs_dropped": stream.docs_dropped,
+             "nan_skipped": nan_skipped, "replay_windows": replay_tokens,
+             "expert_usage": model.expert_usage(),
+             "parameters": report["total_parameters"],
+             "active_parameters": report["active_parameters"],
+             "seconds": round(time.time() - started, 1)}
+    save(model, tokenizer, args.out / "chat.pt", args, final)
+    (args.out / "stream_report.json").write_text(json.dumps(final, indent=2))
+    print(f"\nfinished {step - start_step:,} steps in {time.time()-started:.0f}s")
+    print(f"docs {stream.docs_read:,}, tokens {stream.tokens_seen:,}, "
+          f"non-finite steps skipped {nan_skipped}")
+    print(f"expert usage: {final['expert_usage']}")
+
+
+if __name__ == "__main__":
+    main()

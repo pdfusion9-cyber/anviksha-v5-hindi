@@ -1,0 +1,114 @@
+name: moe-1b
+
+# One billion parameters, forty-four million active per token, trained on a CPU.
+#
+# A dense 1B needs 16 GB before activations -- weights, gradients and two AdamW
+# states at four bytes each -- and the runner has 16 GB in total, so a dense 1B
+# is not a training target here whatever the schedule says. A sparse mixture of
+# experts is: 1,084M parameters exist, 44.1M are touched per token, and the
+# training footprint is 0.70 GB. Both numbers are reported on every checkpoint.
+#
+# The corpus is streamed. Documents are read one at a time, filtered, tokenised,
+# and packed into a rolling window buffer, so a 2.26 GB corpus never lands in
+# memory.
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "clock budget in minutes"
+        required: true
+        default: "240"
+      experts:
+        description: "number of experts"
+        required: true
+        default: "64"
+      layers:
+        description: "transformer layers"
+        required: true
+        default: "8"
+      dim:
+        description: "model width"
+        required: true
+        default: "512"
+      vocab:
+        description: "tokenizer vocabulary"
+        required: true
+        default: "8192"
+      batch:
+        description: "batch size"
+        required: true
+        default: "4"
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install numpy torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: What this configuration actually is
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "src")
+          from moe_model import MoEConfig
+          cfg = MoEConfig(vocab=${{ inputs.vocab }}, dim=${{ inputs.dim }},
+                          layers=${{ inputs.layers }}, heads=max(${{ inputs.dim }}//64, 2),
+                          seq_len=256, experts=${{ inputs.experts }}, top_k=2, ffn_mult=4)
+          c = cfg.counts()
+          print(f"total parameters   {c['total']:,}")
+          print(f"active per token   {c['active']:,}  ({c['active']/c['total']*100:.1f}%)")
+          print(f"training footprint {c['active']*16/1e9:.2f} GB")
+          print(f"weights on disk    {c['total']*4/1e9:.1f} GB")
+          PY
+
+      - name: Get the corpus
+        run: |
+          python src/fetch_hplt.py --out data/hplt --max-bytes 4705746944 --max-docs 150000 || true
+          ls -la data/hplt/ 2>/dev/null | head
+          test -f data/hplt/hindi_corpus.txt || { echo "no corpus; aborting"; exit 1; }
+
+      - name: Stream-train the mixture of experts
+        run: |
+          python src/stream_train.py \
+            --text data/hplt/hindi_corpus.txt \
+            --out runs/moe1b \
+            --vocab ${{ inputs.vocab }} \
+            --dim ${{ inputs.dim }} \
+            --layers ${{ inputs.layers }} \
+            --heads $((${{ inputs.dim }} / 64)) \
+            --experts ${{ inputs.experts }} \
+            --top-k 2 \
+            --ffn-mult 4 \
+            --seq-len 256 \
+            --batch ${{ inputs.batch }} \
+            --threads 4 \
+            --lr 3e-4 \
+            --balance-weight 0.05 \
+            --content-filter \
+            --blocklist rules/content_blocklist.json \
+            --clock-budget-minutes ${{ inputs.minutes }} \
+            --checkpoint-every 500 \
+            --buffer-windows 512
+
+      - name: Report
+        if: always()
+        run: |
+          cat runs/moe1b/stream_report.json 2>/dev/null || echo "no report written"
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: moe-1b
+          path: |
+            runs/moe1b/chat.pt
+            runs/moe1b/tokenizer.json
+            runs/moe1b/stream_report.json
+          if-no-files-found: warn
