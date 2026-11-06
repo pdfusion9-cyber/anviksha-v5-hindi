@@ -139,9 +139,14 @@ class Kavach:
     def _is_question(text: str) -> bool:
         import re
         low = text.strip().lower()
-        return bool(re.match(r"^(what|how|why|where|when|which|who|is|are|does|"
-                             r"do|can|could|should|explain|describe|tell me)\b",
-                             low)) and low.endswith("?")
+        english = re.match(
+            r"^(what|how|why|where|when|which|who|is|are|does|do|can|could|"
+            r"should|explain|describe|tell me)\\b", low)
+        indic = re.search(
+            r"(क्या|कैसे|क्यों|कहाँ|कब|कौन|किस|किसे|बताइए|समझाइए|"
+            r"\\bkya\\b|\\bkaise\\b|\\bkyun\\b|\\bkahan\\b|\\bkab\\b|\\bkaun\\b)",
+            low)
+        return low.endswith(("?", "？")) and bool(english or indic)
 
     @staticmethod
     def _looks_like_code(text: str) -> bool:
