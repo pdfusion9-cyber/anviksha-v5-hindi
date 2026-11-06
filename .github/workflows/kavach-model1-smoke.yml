@@ -57,7 +57,7 @@ jobs:
           python src/evaluate_kavach_model1.py \
             --checkpoint model/hindi_five.pt \
             --tokenizer model/tokenizer.json \
-            --max-new-tokens "${{ inputs.max_new_tokens }}" \
+            --max-new-tokens "${{ github.event.inputs.max_new_tokens || '24' }}" \
             --out runs/kavach_model1_smoke.json
       - uses: actions/upload-artifact@v4
         if: always()
