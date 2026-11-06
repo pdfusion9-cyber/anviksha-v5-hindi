@@ -60,23 +60,33 @@ jobs:
 
       - name: Fold them into one
         run: |
-          FOUND=$(find . -name chat.pt | sort)
-          echo "$FOUND"
-          COUNT=$(echo "$FOUND" | wc -l)
-          [ "$COUNT" -ge 2 ] || { echo "only $COUNT checkpoints"; exit 1; }
-          TOK=$(find . -name tokenizer.json | head -1)
+          set -eu
+          FOUND=$(find copies -name chat.pt | sort)
+          COUNT=$(printf "%s\n" "$FOUND" | grep -c . || true)
+          echo "checkpoints found: $COUNT"
+          printf "%s\n" "$FOUND"
+          [ "$COUNT" -ge 2 ] || { echo "a transfer needs at least two"; exit 1; }
+
+          # the tokenizer: take it from the shared bundle if present, else from
+          # any copy, and never copy a file onto itself
+          TOK=$(find sharedroot copies -name tokenizer.json 2>/dev/null | head -1)
           echo "tokenizer: $TOK"
+          [ -n "$TOK" ] || { echo "no tokenizer; embedding rows would not line up"; exit 1; }
+
           mkdir -p work out
-          cp "$(echo "$FOUND" | head -1)" work/acc.pt
-          cp "$TOK" work/tokenizer.json
-          for NEXT in $(echo "$FOUND" | tail -n +2); do
-            echo "=== folding $(dirname $NEXT) ==="
+          BASE=$(printf "%s\n" "$FOUND" | head -1)
+          cp "$BASE" work/acc.pt
+          cp "$TOK" work/tok.json
+
+          for NEXT in $(printf "%s\n" "$FOUND" | tail -n +2); do
+            echo "=== folding $(dirname "$NEXT") ==="
             python src/merge_experts.py --base work/acc.pt --incoming "$NEXT" \
               --out work/next.pt --threshold 0.95 --average-shared
             mv work/next.pt work/acc.pt
           done
+
           cp work/acc.pt out/hindi_five.pt
-          cp "$TOK" out/tokenizer.json
+          cp work/tok.json out/tokenizer.json
           python - <<'PY'
           import json, sys, torch
           sys.path.insert(0, "src")
