@@ -185,10 +185,12 @@ def merge(base_path: Path, incoming_path: Path, out_path: Path,
             merged[router_key] = old_router.clone()
 
         dupes = nb_l - len(keep)
-        # count experts, not expert-layer pairs: the first layer's figure is the
-        # number of experts added, and every layer adds the same ones
+        # Count experts, not expert-layer pairs. The first layer's figure is the
+        # number of experts added and dropped; summing across layers reported
+        # "47 duplicates" from a copy of twelve.
         if layer == 0:
             total_added = added
+            total_dupes = dupes
         total_dupes += dupes
         report["per_layer"].append({
             "layer": layer, "base_experts": na, "incoming_experts": nb,
@@ -256,6 +258,12 @@ def main() -> None:
               average_shared=args.average_shared)
     print(f"\nexperts {r['experts_base']} + {r['experts_added']} new "
           f"- {r['experts_dropped_as_duplicate']} duplicates = {r['experts_final']}")
+    if r['experts_dropped_as_duplicate'] > r['experts_added']:
+        print(f"  WARNING: more experts were dropped as duplicates than kept. "
+              f"Experts that started from the same seed and trained only "
+              f"briefly have not diverged yet, so similarity cannot tell them "
+              f"apart and the threshold discards real work. Either train "
+              f"longer or raise --threshold towards 0.999.")
     print(f"written to {args.out}")
     print(f"report   {args.out.parent / 'merge_report.json'}")
 

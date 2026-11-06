@@ -81,7 +81,7 @@ jobs:
           for NEXT in $(printf "%s\n" "$FOUND" | tail -n +2); do
             echo "=== folding $(dirname "$NEXT") ==="
             python src/merge_experts.py --base work/acc.pt --incoming "$NEXT" \
-              --out work/next.pt --threshold 0.95 --average-shared
+              --out work/next.pt --threshold 0.999 --average-shared
             mv work/next.pt work/acc.pt
           done
 
