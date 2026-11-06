@@ -4,6 +4,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+import torch
+
 from moe_sft import build_example, make_batch
 
 
@@ -55,7 +57,7 @@ def test_sft_batch_padding_is_ignored_by_loss_mask():
     for i, row in enumerate((a, b)):
         n = len(row["tokens"]) - 1
         assert (x[i, :n] != tok.pad).all()
-        assert (mask[i, :n] == row["loss_mask"]).all()
+        assert torch.equal(mask[i, :n], torch.tensor(row["loss_mask"], dtype=torch.float32))
         assert (mask[i, n:] == 0).all()
 
 
