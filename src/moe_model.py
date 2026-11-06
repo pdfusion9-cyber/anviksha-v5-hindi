@@ -76,15 +76,17 @@ class MoEConfig:
         attn = 4 * self.dim * self.dim
         per_expert = 2 * self.dim * self.ffn
         moe = self.experts * per_expert
+        router = self.experts * self.dim
         norms = 4 * self.dim
-        per_layer = attn + moe + norms
+        per_layer = attn + moe + router + norms
         body = per_layer * self.layers
         embed = self.vocab * self.dim
         total = body + embed + self.seq_len * self.dim + 2 * self.dim
-        active_per_layer = attn + self.top_k * per_expert + norms
-        active = active_per_layer * self.layers + embed
+        active_per_layer = attn + router + self.top_k * per_expert + norms
+        active = active_per_layer * self.layers + embed + self.seq_len * self.dim + 2 * self.dim
         return {"total": total, "active": active,
-                "per_expert": per_expert, "per_layer": per_layer}
+                "per_expert": per_expert, "router_per_layer": router,
+                "per_layer": per_layer}
 
 
 class Attention(nn.Module):
