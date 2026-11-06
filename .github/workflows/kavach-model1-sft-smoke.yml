@@ -10,6 +10,7 @@ on:
       - ".github/workflows/kavach-model1-sft-smoke.yml"
       - "src/evaluate_kavach_model1.py"
       - "src/kavach_model1.py"
+      - "src/int4_checkpoint.py"
   workflow_dispatch:
     inputs:
       sft_run_id:
@@ -80,6 +81,24 @@ jobs:
           assert before is not None and after is not None and after < before
           print(f"SFT report validated; held-out answer loss {before:.6f} -> {after:.6f}")
           PY
+      - name: Quantize full SFT candidate to packed INT4
+        run: |
+          python src/int4_checkpoint.py quantize \
+            --input candidate/runs/kavach_model1_chat_sft.pt \
+            --output runs/kavach_model1_chat_sft.int4.pt \
+            --tokenizer base/tokenizer.json --group-size 128
+          python src/int4_checkpoint.py verify \
+            --input runs/kavach_model1_chat_sft.int4.pt \
+            | tee runs/kavach_model1_int4_verify.json
+          test -s runs/kavach_model1_chat_sft.int4.pt
+      - name: Upload packed INT4 checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: kavach-model1-chat-sft-int4
+          path: |
+            runs/kavach_model1_chat_sft.int4.pt
+            runs/kavach_model1_int4_verify.json
+          if-no-files-found: error
       - name: Run six guarded prompts against SFT candidate
         run: |
           python src/evaluate_kavach_model1.py \
