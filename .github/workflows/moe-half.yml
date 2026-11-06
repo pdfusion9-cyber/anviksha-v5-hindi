@@ -1,0 +1,143 @@
+name: moe-half
+
+# One half of a billion-parameter model, trained on half the security corpus.
+#
+# Two runs of this workflow make the whole. Each trains 32 experts, about 550M
+# parameters, on a half of the corpus that the other never sees. The merge then
+# adds B's experts to A's and the router grows from 32 rows to 64, which is
+# 1,086,473,216 parameters -- the billion the two halves were split from.
+#
+# Why split by experts and not by layers: a model with half the layers is half a
+# model and cannot be evaluated, and a model with half the width is a different
+# architecture. An expert is the one unit that can be trained alone, tested alone
+# and then added without reshaping anything, which is exactly what a merge needs.
+#
+# What this cannot do, and the run will say so at the end: 240 minutes of CPU on
+# 550M parameters is about a hundred steps and a few hundred thousand tokens.
+# That proves the architecture and the merge. It does not produce a model that
+# knows cyber security. Nothing on this hardware will.
+
+on:
+  workflow_dispatch:
+    inputs:
+      half:
+        description: "a = defending, b = failures"
+        required: true
+        default: "a"
+      tokenizer-from:
+        description: "run id whose tokenizer to reuse (required for b)"
+        required: false
+        default: ""
+      minutes:
+        description: "training budget"
+        required: true
+        default: "240"
+      experts:
+        description: "experts per half; 32 makes 64 after the merge"
+        required: true
+        default: "32"
+      batch:
+        description: "batch size; half the parameters allows a bigger batch"
+        required: true
+        default: "8"
+
+permissions:
+  contents: read
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          python -c "import torch; print('torch', torch.__version__)"
+
+      - name: What this run is
+        run: |
+          python - <<'PY'
+          from src.moe_model import MoEConfig
+          c = MoEConfig(vocab=8192, dim=512, layers=8, heads=8, seq_len=256,
+                        experts=32, top_k=2, ffn_mult=4).counts()
+          print(f"this half   {c['total']:,} parameters")
+          print(f"active      {c['active']:,}  ({c['active']/c['total']*100:.1f}%)")
+          print(f"bf16        {c['total']*2*4/1e9:.2f} GB for a training step")
+          print()
+          print("two of these merge to 1,086,473,216 parameters")
+          print("at roughly 100 steps per run the merge proves the architecture")
+          print("and the transfer. It does not produce a knowledgeable model.")
+          PY
+
+      - name: Build the security corpus and split it
+        run: |
+          python src/fetch_security_corpus.py --out data/security_corpus
+          ls -la data/security_corpus/ | head
+          test -s data/security_corpus/corpus.jsonl || { echo "empty corpus"; exit 1; }
+          python src/split_security.py data/security_corpus/corpus.jsonl
+
+      - name: Get the tokenizer
+        if: inputs.tokenizer-from != ''
+        run: |
+          python - <<'PY'
+          import os, subprocess, sys, json, urllib.request
+          run_id = os.environ["TOK_FROM"]
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}/artifacts"
+          req = urllib.request.Request(url, headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}"})
+          arts = json.loads(urllib.request.urlopen(req).read())["artifacts"]
+          want = [a for a in arts if a["name"].startswith("moe-half-a")]
+          if not want:
+              print("no artifact from the other half; cannot share a tokenizer")
+              sys.exit(1)
+          a = want[0]
+          req = urllib.request.Request(a["archive_download_url"],
+                                       headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}"})
+          open("tok.zip", "wb").write(urllib.request.urlopen(req).read())
+          subprocess.run(["unzip", "-o", "tok.zip", "-d", "tok"], check=True)
+          print("tokenizer brought over:", os.listdir("tok"))
+          PY
+        env:
+          TOK_FROM: ${{ inputs.tokenizer-from }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Train this half
+        run: |
+          HALF="${{ inputs.half }}"
+          if [ "$HALF" = "a" ]; then CORPUS=data/security/half_a_defend.txt; else CORPUS=data/security/half_b_failures.txt; fi
+          TOKARG=""
+          if [ -f tok/tokenizer.json ]; then TOKARG="--tokenizer-from tok/tokenizer.json"; fi
+          python src/stream_train.py \
+            --text "$CORPUS" \
+            --out "runs/half_$HALF" \
+            --vocab 8192 \
+            $TOKARG \
+            --dim 512 --layers 8 --heads 8 \
+            --experts ${{ inputs.experts }} --top-k 2 --ffn-mult 4 \
+            --seq-len 256 --batch ${{ inputs.batch }} \
+            --dtype bf16 --threads 4 \
+            --minutes ${{ inputs.minutes }} \
+            --content-filter \
+            --checkpoint-every 20 \
+            --report-every 10
+
+      - name: Report
+        if: always()
+        run: |
+          cat "runs/half_${{ inputs.half }}/stream_report.json" 2>/dev/null || echo "no report"
+          cat data/security/split_report.json 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: moe-half-${{ inputs.half }}
+          path: |
+            runs/half_${{ inputs.half }}/
+            data/security/split_report.json
+          if-no-files-found: warn

@@ -167,13 +167,17 @@ class GraphRules:
                                       f"of its appearances (limit "
                                       f"{self.max_verb_share:.0%})")
 
-        # E4: carries information about this corpus
-        if self.stats.documents > 0:
-            score = self.stats.idf(tokens[0]) if tokens else 0.0
-            if score < self.min_idf:
-                return self._no("E4", f"{text!r} appears in most documents "
-                                      f"(idf {score:.2f} < {self.min_idf}); "
-                                      f"it distinguishes nothing here")
+        # E4: carries information about this corpus. With no corpus learned
+        # there is nothing to measure against, and accepting on a default is a
+        # judgement made from no evidence. It is reported as such.
+        if self.stats.documents == 0:
+            return self._no("E4", f"no corpus has been learned, so {text!r} "
+                                  f"cannot be judged informative or not")
+        score = self.stats.idf(tokens[0]) if tokens else 0.0
+        if score < self.min_idf:
+            return self._no("E4", f"{text!r} appears in most documents "
+                                  f"(idf {score:.2f} < {self.min_idf}); "
+                                  f"it distinguishes nothing here")
         return Verdict(True)
 
     # -------------------------------------------------------- relation ----
