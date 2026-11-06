@@ -7,7 +7,7 @@ on:
     paths:
       - "src/kavach.py"
       - "src/kavach_model1.py"
-      - "src/moe_sft.py"
+      - "src/moe_sft.py"\n      - "src/evaluate_kavach_model1.py"
       - "src/security_agent.py"
       - "src/capability_policy.py"
       - "src/kavach_sandbox.py"
