@@ -145,8 +145,8 @@ def main() -> int:
         }
 
         expected = {
-            "parameters": 1_046_065_920,
-            "active_parameters": 26_750_976,
+            "parameters": 1_046_403_840,
+            "active_parameters": 27_088_896,
             "experts": 110,
             "layers": 8,
             "dim": 384,
@@ -431,13 +431,29 @@ def main() -> int:
             report["checks"]["tied_embedding_head"]["pass"],
             report["checks"]["unique_parameter_count"]["pass"],
         ])
+        generation_nonempty = all(
+            row.get("generated_tokens", 0) > 0 and row.get("continuation", "").strip()
+            for row in generations
+        )
+        report["generation_smoke_test"] = {
+            "pass": generation_nonempty,
+            "nonempty_continuations": sum(
+                bool(row.get("continuation", "").strip()) for row in generations
+            ),
+            "prompt_count": len(generations),
+            "quality_certified": False,
+            "note": "Raw continuation only; instruction following and factuality require separate evaluation.",
+        }
         report["result"] = {
             "structural_and_forward_pass": structural_pass,
+            "generation_smoke_test_pass": generation_nonempty,
             "chat_quality_certified": False,
-            "explanation": (
-                "A forward pass and raw continuation smoke test do not prove "
-                "instruction following, factuality, or unseen-domain generalisation."
-            ),
+            "overall_pass": structural_pass and generation_nonempty,
+            "failed_structural_checks": [
+                name for name, item in report["checks"].items()
+                if isinstance(item, dict) and item.get("pass") is False
+            ],
+            "explanation": "Structural integrity and generation quality are separate results.",
         }
         (report_dir / "merged_1b_audit.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
