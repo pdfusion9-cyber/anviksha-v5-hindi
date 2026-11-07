@@ -1,0 +1,142 @@
+name: KAVACH unified train-quantize-inference
+
+on:
+  push:
+    branches:
+      - anviksha-safe-merge-20261106
+    paths:
+      - ".github/workflows/kavach-unified.yml"
+      - "src/**"
+      - "tests/**"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: kavach-unified-anviksha-safe-merge-20261106
+  cancel-in-progress: true
+
+jobs:
+  unified:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Cancel all other active runs on this branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = 'anviksha-safe-merge-20261106';
+            const current = context.runId;
+            for (const status of ['queued', 'in_progress']) {
+              const result = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                branch,
+                status,
+                per_page: 100
+              });
+              for (const run of result.data.workflow_runs) {
+                if (run.id === current) continue;
+                core.info(`Cancelling ${run.id} ${run.name} (${run.status})`);
+                try {
+                  await github.rest.actions.cancelWorkflowRun({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    run_id: run.id
+                  });
+                } catch (error) {
+                  core.warning(`Could not cancel ${run.id}: ${error.message}`);
+                }
+              }
+            }
+      - uses: actions/checkout@v4
+        with:
+          ref: anviksha-safe-merge-20261106
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pyarrow pytest
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Run deterministic quality gates
+        run: |
+          python -m py_compile src/kavach.py src/kavach_model1.py src/moe_sft.py src/bpe_tokenizer.py src/fetch_multi.py src/evaluate_kavach_model1.py src/int4_checkpoint.py src/security_agent.py src/capability_policy.py src/kavach_sandbox.py src/pii_india.py
+          python -m pytest -vv --tb=long tests/test_kavach_policy.py tests/test_kavach_model1.py tests/test_moe_sft.py tests/test_model1_output_quality.py src/test_security_agent.py
+      - name: Download and verify immutable merged base
+        uses: actions/download-artifact@v4
+        with:
+          name: hindi-five-folded
+          path: base
+          run-id: "42233090777"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Verify base and tokenizer
+        run: |
+          test -s base/hindi_five.pt
+          test -s base/tokenizer.json
+          sha256sum base/hindi_five.pt base/tokenizer.json | tee base/source.sha256
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("base/summary.json").read_text())
+          assert s.get("strict_state_dict_load") is True
+          assert s.get("finite_forward") is True
+          assert s.get("actual_unique_parameters")==574391040
+          print("Verified immutable base:",s["actual_unique_parameters"])
+          PY
+      - name: Build licensed Hindi train and held-out sets
+        run: |
+          python src/fetch_multi.py --out data --heldout 500 --cap 12000
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          train=[json.loads(x) for x in Path("data/multi_train.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+          held=[json.loads(x) for x in Path("data/multi_heldout.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+          assert len(train)>=100 and len(held)>=100
+          a={x["user"][:100] for x in train}; b={x["user"][:100] for x in held}
+          assert not a & b, "train/heldout prompt overlap"
+          print(f"licensed pairs: train={len(train)}, heldout={len(held)}, overlap=0")
+          PY
+      - name: Full shuffled answer-only SFT epoch
+        run: |
+          python src/moe_sft.py --checkpoint base/hindi_five.pt --tokenizer base/tokenizer.json --train data/multi_train.jsonl --heldout data/multi_heldout.jsonl --out runs/kavach_model1_chat_sft.pt --report runs/kavach_model1_chat_sft.json --steps 0 --learning-rate 0.00002 --batch-size 1 --max-seq-len 256 --max-answer-tokens 96 --eval-limit 128 --threads 2
+      - name: Validate SFT report and immutable source
+        run: |
+          sha256sum -c base/source.sha256
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          r=json.loads(Path("runs/kavach_model1_chat_sft.json").read_text())
+          assert r["source_checkpoint_preserved"] is True and r["answer_only_loss"] is True
+          assert r["usable_pairs"]>=100
+          print("SFT steps:",r["steps"],"coverage epochs:",r.get("training_coverage_epochs"))
+          print("heldout before:",r["heldout_answer_loss_before"])
+          print("heldout after:",r["heldout_answer_loss_after"])
+          PY
+      - name: Quantize exact SFT candidate to packed INT4
+        run: |
+          python src/int4_checkpoint.py quantize --input runs/kavach_model1_chat_sft.pt --output runs/kavach_model1_chat_sft.int4.pt --tokenizer base/tokenizer.json --group-size 128
+          python src/int4_checkpoint.py verify --input runs/kavach_model1_chat_sft.int4.pt | tee runs/kavach_model1_int4_verify.json
+          python src/int4_checkpoint.py dequantize --input runs/kavach_model1_chat_sft.int4.pt --output runs/kavach_model1_chat_sft.int4_dequant.pt | tee runs/kavach_model1_int4_dequant.json
+      - name: Strict-load INT4-reconstructed checkpoint and run six guarded prompts
+        run: |
+          python src/evaluate_kavach_model1.py --checkpoint runs/kavach_model1_chat_sft.int4_dequant.pt --tokenizer base/tokenizer.json --max-new-tokens 48 --out runs/kavach_model1_int4_smoke.json
+      - name: Upload single-run candidate, INT4 and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kavach-unified-candidate-int4-reports
+          path: |
+            runs/kavach_model1_chat_sft.pt
+            runs/kavach_model1_chat_sft.json
+            runs/kavach_model1_chat_sft.int4.pt
+            runs/kavach_model1_int4_verify.json
+            runs/kavach_model1_int4_dequant.json
+            runs/kavach_model1_int4_smoke.json
+            base/source.sha256
+            data/multi_manifest.json
+          if-no-files-found: warn
