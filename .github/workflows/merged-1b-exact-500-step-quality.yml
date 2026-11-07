@@ -6,6 +6,8 @@ on:
       - experiment/merged-1b-eos-resume-20261107
     paths:
       - .github/workflows/merged-1b-exact-500-step-quality.yml
+      - tools/build_merged_1b_instruction_replay.py
+      - tools/evaluate_merged_1b_heldout.py
   workflow_dispatch:
 
 permissions:
