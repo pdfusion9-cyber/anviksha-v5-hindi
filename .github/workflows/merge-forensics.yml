@@ -1,0 +1,130 @@
+name: merge-forensics
+
+# Why does the merged model route to 26% of its experts when a single copy
+# routes to 69%? The router-row bug is fixed and the gap remains, so the cause is
+# something else in the merge. This measures it on the real checkpoints.
+#
+# Read only. Nothing is modified, nothing is retrained.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  forensics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install --quiet numpy
+
+      - name: Find the five copies and the merged model
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          repo = os.environ["GITHUB_REPOSITORY"]; tok = os.environ["GH_TOKEN"]
+          def api(u):
+              r = urllib.request.Request(u, headers={"Authorization": f"Bearer {tok}",
+                                                     "Accept": "application/vnd.github+json"})
+              return json.loads(urllib.request.urlopen(r).read())
+          best, merged = {}, None
+          for page in (1, 2, 3):
+              runs = api(f"https://api.github.com/repos/{repo}/actions/runs")["workflow_runs"]
+              if not runs: break
+              for r in runs:
+                  if r.get("conclusion") != "success": continue
+                  for a in api(r["artifacts_url"])["artifacts"]:
+                      n = a["name"]
+                      if n.startswith("segment-") and r["name"] == "vocab-then-train":
+                          c = n.split("-")[1]
+                          if c not in best: best[c] = r["id"]
+                      if n == "merged-1b" and merged is None:
+                          merged = r["id"]
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a") as f:
+              for c, rid in best.items(): f.write(f"run{c}={rid}\n")
+              f.write(f"merged={merged}\n")
+          print("copies", best, "merged run", merged)
+          PY
+
+      - name: Fetch merged
+        uses: actions/download-artifact@v4
+        with:
+          pattern: merged-1b
+          path: data/merged
+          run-id: ${{ steps.find.outputs.merged }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Fetch copy 0
+        uses: actions/download-artifact@v4
+        with:
+          pattern: segment-0-*
+          path: data/c0
+          run-id: ${{ steps.find.outputs.run0 }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Fetch copy 1
+        uses: actions/download-artifact@v4
+        with:
+          pattern: segment-1-*
+          path: data/c1
+          run-id: ${{ steps.find.outputs.run1 }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Fetch copy 2
+        uses: actions/download-artifact@v4
+        with:
+          pattern: segment-2-*
+          path: data/c2
+          run-id: ${{ steps.find.outputs.run2 }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Fetch copy 3
+        uses: actions/download-artifact@v4
+        with:
+          pattern: segment-3-*
+          path: data/c3
+          run-id: ${{ steps.find.outputs.run3 }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Fetch copy 4
+        uses: actions/download-artifact@v4
+        with:
+          pattern: segment-4-*
+          path: data/c4
+          run-id: ${{ steps.find.outputs.run4 }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+
+      - name: List what arrived
+        run: |
+          find data -name "*.pt" | sort
+          echo "checkpoints: $(find data -name '*.pt' | wc -l)"
+
+      - name: Run the forensics
+        run: |
+          set -eu
+          M=$(find data/merged -name merged.pt | head -1)
+          C0=$(find data/c0 -name chat.pt | head -1)
+          C1=$(find data/c1 -name chat.pt | head -1)
+          C2=$(find data/c2 -name chat.pt | head -1)
+          C3=$(find data/c3 -name chat.pt | head -1)
+          C4=$(find data/c4 -name chat.pt | head -1)
+          python src/merge_forensics.py "$M" "$C0" "$C1" "$C2" "$C3" "$C4"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: merge-forensics
+          path: merge_forensics.json
+          if-no-files-found: warn
