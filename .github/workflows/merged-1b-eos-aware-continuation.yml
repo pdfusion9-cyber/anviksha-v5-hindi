@@ -6,6 +6,7 @@ on:
       - experiment/merged-1b-eos-resume-20261107
     paths:
       - .github/workflows/merged-1b-eos-aware-continuation.yml
+      - tools/audit_merged_1b_checkpoint.py
   workflow_dispatch:
     inputs:
       source-run-id:
@@ -107,8 +108,8 @@ jobs:
           if not d["all_float_tensors_finite"]: raise SystemExit("non-finite checkpoint tensor")
           if not d["tied_embeddings"]: raise SystemExit("embedding/head tie broken")
           if not d["optimizer_state_present"]: raise SystemExit("Adafactor state missing")
-          u=d["expert_usage"]
-          if u and abs(sum(u)-1.0)>0.02: raise SystemExit("expert usage does not sum to one")
+          if not d["expert_usage_validation"]["passed"]:
+              raise SystemExit("expert usage validation failed: " + str(d["expert_usage_validation"]))
           PY
 
       - name: Compare the same six English and Hindi prompts
