@@ -40,7 +40,7 @@ jobs:
         with:
           name: repaired-merged-1b-model
           path: baseline
-          run-id: ${{ inputs.source-run-id }}
+          run-id: ${{ inputs.source-run-id || '42352023153' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
 
@@ -90,7 +90,7 @@ jobs:
             --lr 0.000005 \
             --optimizer adafactor \
             --dtype fp32 \
-            --target-steps ${{ inputs.target-steps }} \
+            --target-steps ${{ inputs.target-steps || '50' }} \
             --checkpoint-every 10 \
             --clock-budget-minutes 300 \
             --threads 2 \
