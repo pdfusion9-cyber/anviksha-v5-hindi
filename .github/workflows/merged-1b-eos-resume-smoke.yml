@@ -7,6 +7,8 @@ on:
     paths:
       - src/stream_train.py
       - tests/test_stream_train_eos_resume.py
+      - src/factorized_adafactor.py
+      - tests/test_factorized_adafactor.py
       - .github/workflows/merged-1b-eos-resume-smoke.yml
   workflow_dispatch:
 
@@ -27,4 +29,6 @@ jobs:
       - name: Compile changed trainer
         run: python -m py_compile src/stream_train.py
       - name: Run EOS and exact-resume unit tests
-        run: python -m unittest discover -s tests -p 'test_stream_train_eos_resume.py' -v
+        run: |
+          python -m unittest discover -s tests -p 'test_stream_train_eos_resume.py' -v
+          python -m unittest discover -s tests -p 'test_factorized_adafactor.py' -v
