@@ -128,22 +128,37 @@ def balanced_topk_indices(logits: torch.Tensor, top_k: int) -> torch.Tensor:
     token_order = torch.argsort(confidence, descending=True).cpu().tolist()
 
     assigned = [[-1] * top_k for _ in range(token_count)]
-    for token_index in token_order:
+    for order_index, token_index in enumerate(token_order):
         chosen = set()
-        for slot in range(top_k):
-            selected = -1
-            for expert_index in ranked_experts[token_index]:
-                if expert_index not in chosen and remaining[expert_index] > 0:
-                    selected = expert_index
-                    break
-            if selected < 0:
-                raise RuntimeError(
-                    "balanced routing exhausted quotas before every token "
-                    "received distinct top-k assignments"
-                )
-            assigned[token_index][slot] = selected
+        # Feasibility guard: with R tokens remaining, no expert may retain
+        # more than R slots, because a token cannot select one expert twice.
+        # Any expert exactly at capacity R is therefore mandatory now.
+        tokens_left_after_this = token_count - order_index - 1
+        mandatory = [
+            expert_index for expert_index, quota in enumerate(remaining)
+            if quota > tokens_left_after_this
+        ]
+        if len(mandatory) > top_k:
+            raise RuntimeError(
+                "balanced routing feasibility invariant broken: too many "
+                "mandatory experts for the remaining token"
+            )
+        for selected in mandatory:
+            assigned[token_index][len(chosen)] = selected
             chosen.add(selected)
             remaining[selected] -= 1
+        for expert_index in ranked_experts[token_index]:
+            if len(chosen) == top_k:
+                break
+            if expert_index not in chosen and remaining[expert_index] > 0:
+                assigned[token_index][len(chosen)] = expert_index
+                chosen.add(expert_index)
+                remaining[expert_index] -= 1
+        if len(chosen) != top_k:
+            raise RuntimeError(
+                "balanced routing exhausted quotas before every token "
+                "received distinct top-k assignments"
+            )
 
     if any(value != 0 for value in remaining):
         raise RuntimeError("balanced routing left unfilled expert quotas")
