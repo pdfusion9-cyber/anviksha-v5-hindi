@@ -36,7 +36,16 @@ jobs:
             });
             for (const run of runs.workflow_runs) {
               if (run.id !== current && ['queued', 'in_progress'].includes(run.status)) {
-                await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id: run.id });
+                try {
+                  await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id: run.id });
+                  core.info(`Cancelled superseded audit run ${run.id}`);
+                } catch (error) {
+                  if (error.status === 404) {
+                    core.info(`Run ${run.id} already completed or is no longer cancellable`);
+                  } else {
+                    throw error;
+                  }
+                }
               }
             }
       - uses: actions/setup-python@v5
