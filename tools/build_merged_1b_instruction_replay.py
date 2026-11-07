@@ -381,9 +381,11 @@ TOPICS = [
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--heldout-out", type=Path, required=True)
     args = ap.parse_args()
-    rows = []
-    for topic in TOPICS:
+    train_rows, heldout_rows = [], []
+    split = len(TOPICS) - 6
+    for topic_index, topic in enumerate(TOPICS):
         for lang in ("en", "hi"):
             label, explanation, checklist, pitfall = topic[lang]
             if lang == "en":
@@ -392,47 +394,48 @@ def main() -> None:
                     (f"Give a practical checklist for {label}.", checklist),
                     (f"What common mistake should be avoided with {label}?", pitfall),
                 ]
-                prefix = "User: "
-                answer_prefix = "\nAssistant: "
+                prefix, answer_prefix = "User: ", "\\nAssistant: "
             else:
                 variants = [
                     (f"{label} को सरल भाषा में समझाइए।", explanation),
                     (f"{label} के लिए एक व्यावहारिक checklist दीजिए।", checklist),
                     (f"{label} में कौन-सी सामान्य गलती से बचना चाहिए?", pitfall),
                 ]
-                prefix = "उपयोगकर्ता: "
-                answer_prefix = "\nसहायक: "
+                prefix, answer_prefix = "उपयोगकर्ता: ", "\\nसहायक: "
+            target = heldout_rows if topic_index >= split else train_rows
             for question, answer in variants:
-                text = prefix + question + answer_prefix + answer
-                rows.append({
-                    "text": text,
+                target.append({
+                    "text": prefix + question + answer_prefix + answer,
                     "language": lang,
                     "source": "anviksha-curated-defensive-instructions-v1",
                     "topic": label,
                 })
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    seen = set()
-    with args.out.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            digest = hashlib.sha256(row["text"].encode("utf-8")).hexdigest()
-            if digest in seen:
-                continue
-            seen.add(digest)
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    def write_rows(path: Path, items):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        seen = set()
+        with path.open("w", encoding="utf-8") as handle:
+            for row in items:
+                digest = hashlib.sha256(row["text"].encode("utf-8")).hexdigest()
+                if digest not in seen:
+                    seen.add(digest)
+                    handle.write(json.dumps(row, ensure_ascii=False) + "\\n")
+        return seen
 
-    counts = {"en": 0, "hi": 0}
-    chars = {"en": 0, "hi": 0}
-    for row in rows:
-        counts[row["language"]] += 1
-        chars[row["language"]] += len(row["text"])
+    train_seen = write_rows(args.out, train_rows)
+    heldout_seen = write_rows(args.heldout_out, heldout_rows)
+    counts = {lang: sum(r["language"] == lang for r in train_rows) for lang in ("en", "hi")}
+    heldout_counts = {lang: sum(r["language"] == lang for r in heldout_rows) for lang in ("en", "hi")}
     manifest = {
         "name": "ANVIKSHA bilingual defensive instruction replay v1",
-        "topics": len(TOPICS),
-        "documents": counts,
-        "characters": chars,
-        "unique_documents": len(seen),
-        "sha256": hashlib.sha256(args.out.read_bytes()).hexdigest(),
+        "training_topics": split,
+        "heldout_topics": len(TOPICS) - split,
+        "training_documents": counts,
+        "heldout_documents": heldout_counts,
+        "unique_training_documents": len(train_seen),
+        "unique_heldout_documents": len(heldout_seen),
+        "train_sha256": hashlib.sha256(args.out.read_bytes()).hexdigest(),
+        "heldout_sha256": hashlib.sha256(args.heldout_out.read_bytes()).hexdigest(),
         "training_source": "human-authored original examples",
         "heldout_used_for_training": False,
     }
@@ -440,8 +443,8 @@ def main() -> None:
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
-    if counts["en"] < 50 or counts["hi"] < 50:
-        raise SystemExit("bilingual instruction corpus below its minimum size")
+    if min(counts.values()) < 50 or min(heldout_counts.values()) < 10:
+        raise SystemExit("bilingual train/held-out corpus below minimum size")
 
 
 if __name__ == "__main__":
