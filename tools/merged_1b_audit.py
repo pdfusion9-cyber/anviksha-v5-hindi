@@ -124,7 +124,7 @@ def main() -> int:
         ck = torch.load(
             ckpt_path, map_location="cpu", mmap=True, weights_only=True
         )
-        cfg = MoEConfig(**ck["config"], balanced_routing=True)
+        cfg_data = dict(ck["config"])\n        cfg_data["balanced_routing"] = True\n        cfg = MoEConfig(**cfg_data)
         state = ck["model"]
         counts = cfg.counts()
         report["architecture"] = {
