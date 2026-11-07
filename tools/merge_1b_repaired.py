@@ -131,12 +131,14 @@ def fold(base: dict, incoming: dict, merged: dict, prior_copies: int,
 def main() -> None:
     out = Path("repaired")
     out.mkdir(exist_ok=True)
-    source_files = {
-        i: only_file(Path(f"copies/{i}"), "chat.pt") for i in range(5)
-    }
-    tokenizer_files = {
-        i: only_file(Path(f"copies/{i}"), "tokenizer.json") for i in range(5)
-    }
+    source_dirs = {}
+    for i in range(5):
+        matches = sorted(Path("copies").glob(f"segment-{i}-*"))
+        if len(matches) != 1:
+            raise RuntimeError(f"expected one segment-{i}-* directory, found {len(matches)}")
+        source_dirs[i] = matches[0]
+    source_files = {i: only_file(source_dirs[i], "chat.pt") for i in range(5)}
+    tokenizer_files = {i: only_file(source_dirs[i], "tokenizer.json") for i in range(5)}
     tok_hashes = {p.read_bytes() for p in tokenizer_files.values()}
     if len(tok_hashes) != 1:
         raise RuntimeError("The five source checkpoints do not share byte-identical tokenizers")
