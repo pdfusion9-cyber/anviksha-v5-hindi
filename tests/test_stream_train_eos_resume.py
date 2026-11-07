@@ -23,11 +23,11 @@ class ResumeTests(unittest.TestCase):
     def test_document_boundary_appends_eos(self):
         stream = WindowStream(
             iter(["abcdefghijklmnopqrstuvwx", "ZYXWVUTSRQPONMLKJIHGFEDC"]),
-            TinyTokenizer(), seq_len=4, terms=[], buffer_windows=2,
+            TinyTokenizer(), seq_len=24, terms=[], buffer_windows=2,
         )
-        batch = stream.batch(2, __import__("numpy").random.default_rng(7))
+        batch = stream.batch(1, __import__("numpy").random.default_rng(7))
         self.assertIsNotNone(batch)
-        self.assertTrue(any(99 in row for row in stream.buf))
+        self.assertIn(99, batch[0].tolist())
 
     def test_stream_state_roundtrip_preserves_buffer_and_cursor(self):
         docs = ["abcdefghijklmnopqrstuvwx", "ZYXWVUTSRQPONMLKJIHGFEDC",
