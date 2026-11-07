@@ -78,3 +78,9 @@ jobs:
       - name: Validate contrastive DG benchmark
         run: |
           python research/hcdm110/test_contrastive_dg.py
+      - name: Run large independent-query paired evaluation
+        run: |
+          python research/hcdm110/benchmark_large_query_eval.py --out reports/hcdm110_large_query_eval.json
+      - name: Validate large-query paired evaluation
+        run: |
+          python research/hcdm110/test_large_query_eval.py
