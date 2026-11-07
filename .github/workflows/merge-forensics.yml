@@ -97,9 +97,18 @@ jobs:
           C4=$(find data/c4 -name chat.pt | head -1)
           python src/merge_forensics.py "$M" "$C0" "$C1" "$C2" "$C3" "$C4"
 
+      - name: Test the router correction
+        if: always()
+        run: |
+          set -eu
+          M=$(find data/merged -name merged.pt | head -1)
+          python src/router_center_test.py "$M"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: merge-forensics
-          path: merge_forensics.json
+          path: |
+            merge_forensics.json
+            router_center.json
           if-no-files-found: warn
