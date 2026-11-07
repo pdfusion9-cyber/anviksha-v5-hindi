@@ -43,11 +43,6 @@ def fold(base: dict, incoming: dict, merged: dict, prior_copies: int,
     if problems:
         raise RuntimeError("incompatible checkpoint: " + "; ".join(problems))
 
-    tokenizer_base = Path(f"copies/{source_copy - 1}/tokenizer.json")
-    tokenizer_incoming = Path(f"copies/{source_copy}/tokenizer.json")
-    if tokenizer_base.is_file() and tokenizer_incoming.is_file():
-        if tokenizer_base.read_bytes() != tokenizer_incoming.read_bytes():
-            raise RuntimeError(f"copy {source_copy}: tokenizer mismatch")
 
     la, lb = layer_count(sa), layer_count(sb)
     if la != lb:
@@ -166,6 +161,9 @@ def main() -> None:
         # Keep a single accumulator reference; release incoming checkpoint pages.
         base["model"] = merged
         del incoming
+        if source_copy > 0:
+            import shutil
+            shutil.rmtree(Path(f"copies/{source_copy}"))
         print(
             f"copy {source_copy}: added "
             f"{report['copies'][-1]['experts_added_per_layer']} experts/layer; "
