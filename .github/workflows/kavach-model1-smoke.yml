@@ -1,23 +1,7 @@
 name: kavach-model1-artifact-smoke
 
-on:
-  push:
-    branches:
-      - anviksha-safe-merge-20261106
-    paths:
-      - ".github/workflows/kavach-model1-smoke.yml"
-      - "src/kavach_model1.py"
-      - "src/evaluate_kavach_model1.py"
-  workflow_dispatch:
-    inputs:
-      checkpoint_run_id:
-        description: "Successful five-copy merge run ID"
-        required: true
-        default: "42233090777"
-      max_new_tokens:
-        description: "Maximum tokens per smoke-test answer"
-        required: true
-        default: "24"
+# Disabled: superseded by .github/workflows/kavach-unified.yml (single-run orchestration).
+on: {}
 
 permissions:
   actions: read
