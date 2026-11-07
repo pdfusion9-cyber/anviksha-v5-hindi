@@ -1,0 +1,55 @@
+name: hcdm110-isolated-prototype-tests
+
+on:
+  push:
+    branches:
+      - experiment/hcdm110-isolated-prototype-20261107
+    paths:
+      - research/hcdm110/**
+      - .github/workflows/hcdm110-isolated-prototype-tests.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install CPU-only PyTorch
+        run: |
+          python -m pip install --no-cache-dir --quiet torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Confirm isolation contract
+        run: |
+          set -eu
+          ! grep -R -nE 'from (src\.moe_model|moe_model|src\.stream_train)|import (moe_model|stream_train)' research/hcdm110
+          ! grep -R -nE 'torch\.load|torch\.save|load_state_dict' research/hcdm110
+          python -m py_compile research/hcdm110/hcdm110_prototype.py research/hcdm110/test_hcdm110_prototype.py
+      - name: Run HCDM synthetic component tests
+        run: |
+          python research/hcdm110/test_hcdm110_prototype.py
+      - name: Report exact adapter and memory footprint
+        run: |
+          python - <<'PY'
+          import sys, json, torch
+          sys.path.insert(0, "research/hcdm110")
+          from hcdm110_prototype import HCDM110Prototype, AssociativeMemory
+          m=HCDM110Prototype()
+          p=m.parameter_report()
+          # CPU float32 lower bound for 10,000 4096-dim keys + 384-dim values.
+          memory_bytes=10000*(4096+384)*4
+          print(json.dumps({
+            "prototype_trainable_parameters":p["trainable_parameters"],
+            "adapter_parameters":p["adapter_parameters"],
+            "frozen_dg_projection_elements":p["dg_frozen_buffer_elements"],
+            "memory_10k_entries_float32_bytes":memory_bytes,
+            "memory_10k_entries_MiB":round(memory_bytes/2**20,2),
+            "production_checkpoint_loaded":False,
+            "production_model_modified":False
+          },indent=2))
+          PY
