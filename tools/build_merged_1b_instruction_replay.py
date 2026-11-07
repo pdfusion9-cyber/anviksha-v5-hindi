@@ -419,7 +419,13 @@ def main() -> None:
                 digest = hashlib.sha256(row["text"].encode("utf-8")).hexdigest()
                 if digest not in seen:
                     seen.add(digest)
-                    handle.write(json.dumps(row, ensure_ascii=False) + "\\n")
+                    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        # Read the generated JSONL back immediately: catch missing separators
+        # or malformed records before a model-training job can start.
+        with path.open(encoding="utf-8") as check:
+            parsed = [json.loads(line) for line in check]
+        if len(parsed) != len(seen):
+            raise RuntimeError(f"JSONL round-trip mismatch for {path}: {len(parsed)} != {len(seen)}")
         return seen
 
     train_seen = write_rows(args.out, train_rows)
