@@ -1,0 +1,30 @@
+name: merged-1b-eos-resume-smoke
+
+on:
+  push:
+    branches:
+      - experiment/merged-1b-eos-resume-20261107
+    paths:
+      - src/stream_train.py
+      - tests/test_stream_train_eos_resume.py
+      - .github/workflows/merged-1b-eos-resume-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install --quiet numpy torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Compile changed trainer
+        run: python -m py_compile src/stream_train.py
+      - name: Run EOS and exact-resume unit tests
+        run: python -m unittest discover -s tests -p 'test_stream_train_eos_resume.py' -v
