@@ -25,14 +25,46 @@ jobs:
           python-version: "3.12"
       - name: Install CPU dependencies
         run: |
-          python -m pip install --quiet numpy
-          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
-      - name: Download the five immutable source checkpoints
+          python -m pip install --no-cache-dir --quiet numpy
+          python -m pip install --no-cache-dir --quiet torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Download source checkpoint 0
         uses: actions/download-artifact@v4
         with:
-          pattern: segment-*
-          path: copies
-          run-id: 42342513329
+          name: segment-0-42275510662
+          path: copies/segment-0-42275510662
+          run-id: 42275510662
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Download source checkpoint 1
+        uses: actions/download-artifact@v4
+        with:
+          name: segment-1-42273920152
+          path: copies/segment-1-42273920152
+          run-id: 42273920152
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Download source checkpoint 2
+        uses: actions/download-artifact@v4
+        with:
+          name: segment-2-42271805121
+          path: copies/segment-2-42271805121
+          run-id: 42271805121
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Download source checkpoint 3
+        uses: actions/download-artifact@v4
+        with:
+          name: segment-3-42267619625
+          path: copies/segment-3-42267619625
+          run-id: 42267619625
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Download source checkpoint 4
+        uses: actions/download-artifact@v4
+        with:
+          name: segment-4-42272958418
+          path: copies/segment-4-42272958418
+          run-id: 42272958418
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
       - name: Build repaired five-way merge with original routers
