@@ -1,0 +1,120 @@
+name: merged-1b-eos-aware-continuation
+
+on:
+  workflow_dispatch:
+    inputs:
+      source-run-id:
+        description: "Successful repaired merged-1B artifact run"
+        required: true
+        default: "42352023153"
+      target-steps:
+        description: "Absolute target step for this isolated continuation"
+        required: true
+        default: "50"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  continuation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --no-cache-dir --quiet numpy zstandard
+          python -m pip install --no-cache-dir --quiet torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Download the immutable repaired 1B checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: repaired-merged-1b-model
+          path: baseline
+          run-id: ${{ inputs.source-run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+
+      - name: Verify source artifact layout and tokenizer
+        run: |
+          set -eu
+          find baseline -maxdepth 2 -type f -printf '%p %s bytes\n'
+          test -s baseline/merged.pt
+          test -s baseline/tokenizer.json
+          python tools/audit_merged_1b_checkpoint.py --checkpoint baseline/merged.pt --tokenizer baseline/tokenizer.json --out reports/baseline_integrity.json
+
+      - name: Capture baseline six-prompt generation
+        run: |
+          mkdir -p baseline_eval
+          python tools/merged_1b_compare.py --baseline baseline/merged.pt --candidate baseline/merged.pt --tokenizer baseline/tokenizer.json --out baseline_eval/baseline_selfcheck.json --max-new 48
+
+      - name: Fetch bounded CC0 Hindi and English corpora
+        run: |
+          python src/fetch_hplt.py --lang hin_Deva --max-bytes 250000000 --max-docs 5000 --min-chars 200 --out-dir data/hplt_hi
+          python src/fetch_hplt.py --lang eng_Latn --max-bytes 250000000 --max-docs 5000 --min-chars 200 --min-script 0.5 --out-dir data/hplt_en
+          python tools/prepare_merged_1b_corpus.py --english data/hplt_en/hindi_corpus.txt --hindi data/hplt_hi/hindi_corpus.txt --out data/merged_1b_continuation.jsonl --min-english-docs 500 --min-hindi-docs 500
+
+      - name: Initialize EOS-aware Adafactor continuation from repaired weights
+        run: |
+          set -eu
+          python - <<'PY'
+          import json, torch
+          ck=torch.load("baseline/merged.pt",map_location="cpu",mmap=True,weights_only=False)
+          cfg=ck["config"]
+          print(json.dumps({"step":ck.get("step",0),"config":cfg,"parameters":sum(v.numel() for v in ck["model"].values() if hasattr(v,"numel"))},indent=2))
+          PY
+          python src/stream_train.py \
+            --text data/merged_1b_continuation.jsonl \
+            --out continuation \
+            --init-from baseline/merged.pt \
+            --tokenizer-from baseline/tokenizer.json \
+            --vocab 8192 \
+            --dim 512 \
+            --layers 8 \
+            --heads 8 \
+            --experts 110 \
+            --top-k 2 \
+            --ffn-mult 4 \
+            --seq-len 192 \
+            --batch 1 \
+            --lr 0.000005 \
+            --optimizer adafactor \
+            --dtype fp32 \
+            --target-steps ${{ inputs.target-steps }} \
+            --checkpoint-every 10 \
+            --clock-budget-minutes 300 \
+            --threads 2 \
+            --buffer-windows 32
+
+      - name: Audit EOS-aware continuation checkpoint and expert usage
+        run: |
+          set -eu
+          python tools/audit_merged_1b_checkpoint.py --checkpoint continuation/chat.pt --tokenizer continuation/tokenizer.json --out reports/candidate_integrity.json
+          python - <<'PY'
+          import json
+          d=json.load(open("reports/candidate_integrity.json"))
+          if d["global_step"] <= 0: raise SystemExit("candidate checkpoint has no trained steps")
+          if not d["all_float_tensors_finite"]: raise SystemExit("non-finite checkpoint tensor")
+          if not d["tied_embeddings"]: raise SystemExit("embedding/head tie broken")
+          if not d["optimizer_state_present"]: raise SystemExit("Adafactor state missing")
+          u=d["expert_usage"]
+          if u and abs(sum(u)-1.0)>0.02: raise SystemExit("expert usage does not sum to one")
+          PY
+
+      - name: Compare the same six English and Hindi prompts
+        run: |
+          python tools/merged_1b_compare.py --baseline baseline/merged.pt --candidate continuation/chat.pt --tokenizer baseline/tokenizer.json --out reports/six_prompt_comparison.json --max-new 48
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: merged-1b-eos-aware-continuation-report
+          path: |
+            reports/
+            continuation/
+            data/merged_1b_continuation.jsonl.manifest.json
+          if-no-files-found: warn
