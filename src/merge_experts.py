@@ -172,15 +172,20 @@ def merge(base_path: Path, incoming_path: Path, out_path: Path,
             added += 1
             next_id += 1
 
-        # the router must grow a row per new expert. The mean of the existing
-        # rows gives each new expert a fair share of tokens at the start; zeros
-        # would make it unreachable and the transfer pointless.
+        # THE BUG THIS REPLACES. The router used to grow by repeating the mean
+        # of the existing rows once per new expert. After four folds that left
+        # 88 of 110 rows bit-identical, in four groups of 22, and identical rows
+        # cannot be told apart -- so at most one per group could ever win. On the
+        # real checkpoint only 23 of 110 rows were distinct and 13 experts were
+        # used. Each incoming copy already learned which of its own experts
+        # answer which token, so carry those rows across as they are.
         router_key = f"blocks.{layer}.moe.router.weight"
         old_router = sa[router_key]
         if added:
-            mean_row = old_router.mean(dim=0, keepdim=True)
+            inc_router = sb[router_key]
+            keep_rows = inc_router[torch.tensor(keep, dtype=torch.long)]
             merged[router_key] = torch.cat(
-                [old_router.clone(), mean_row.repeat(added, 1)], dim=0)
+                [old_router.clone(), keep_rows.clone()], dim=0)
         else:
             merged[router_key] = old_router.clone()
 
