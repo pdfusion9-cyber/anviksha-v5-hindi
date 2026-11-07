@@ -273,7 +273,8 @@ def build_model(vocab: int, args) -> MoELM:
     cfg = MoEConfig(vocab=vocab, dim=args.dim, layers=args.layers,
                     heads=args.heads, seq_len=args.seq_len,
                     experts=args.experts, top_k=args.top_k,
-                    ffn_mult=args.ffn_mult)
+                    ffn_mult=args.ffn_mult,
+                    balanced_routing=args.balanced_routing)
     return MoELM(cfg)
 
 
@@ -312,6 +313,8 @@ def main() -> None:
     ap.add_argument("--heads", type=int, default=8)
     ap.add_argument("--experts", type=int, default=64)
     ap.add_argument("--top-k", type=int, default=2)
+    ap.add_argument("--balanced-routing", action="store_true",
+                    help="preserve balanced dispatch used by the repaired 110-expert checkpoint")
     ap.add_argument("--ffn-mult", type=int, default=4)
     ap.add_argument("--seq-len", type=int, default=256)
     ap.add_argument("--batch", type=int, default=4)
