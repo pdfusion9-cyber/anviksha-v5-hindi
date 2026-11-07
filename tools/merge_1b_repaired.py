@@ -173,11 +173,19 @@ def main() -> None:
         )
 
     config["experts"] = expert_count(merged, 0)
+    # Enable capacity-balanced top-2 dispatch in the repaired serving checkpoint.
+    # Every batch with >= ceil(110 / 2) tokens can exercise all 110 experts.
+    config["balanced_routing"] = True
+    config["min_gate_weight"] = 0.10
     if len(set(expert_counts(merged))) != 1:
         raise RuntimeError(f"layers ended with inconsistent expert counts: {expert_counts(merged)}")
     cfg = MoEConfig(**config)
     counts = cfg.counts()
-    total_parameters = sum(t.numel() for t in merged.values())
+    # state_dict contains both tied aliases (embed.weight and head.weight);
+    # count the shared embedding only once, matching MoELM.parameters().
+    total_parameters = sum(
+        t.numel() for key, t in merged.items() if key != "head.weight"
+    )
     if total_parameters != counts["total"]:
         raise RuntimeError(
             f"parameter count mismatch: state={total_parameters}, config={counts['total']}"
