@@ -345,8 +345,9 @@ def main() -> None:
     ap.add_argument("--replay-text", type=Path, default=None)
     ap.add_argument("--replay-fraction", type=float, default=0.0)
     ap.add_argument("--dtype", default="fp32", choices=["fp32", "bf16"],
-                   help="bf16 halves weights, gradients and optimiser states. "
-                        "A 1B fp32 model needs 17.3 GB and the runner has 16.")
+                   help="bf16 halves weights and gradients; factored Adafactor keeps small FP32 moments.")
+    ap.add_argument("--optimizer", default="adamw", choices=["adamw", "adafactor"],
+                   help="Adafactor is required for low-memory merged-model continuation.")
     args = ap.parse_args()
 
     torch.set_num_threads(args.threads)
@@ -400,18 +401,34 @@ def main() -> None:
     print(f"       {args.experts} experts, top {args.top_k}, dim {args.dim}, "
           f"{args.layers} layers, window {args.seq_len}")
     bytes_per = 2 if args.dtype == "bf16" else 4
-    need = model.cfg.footprint_gb(bytes_per)
-    print(f"       training footprint {need:.2f} GB "
-          f"(weights + gradients + two optimiser states for all "
-          f"{report['total_parameters']/1e6:.0f}M parameters)")
-    if need > 14.0:
-        raise SystemExit(
-            f"this configuration needs {need:.1f} GB and the runner has 16 GB. "
-            f"Reduce --experts, or use --dtype bf16. Refusing to start a run "
-            f"that will be killed.")
+    if args.optimizer == "adafactor":
+        from factorized_adafactor import FactorizedAdafactor, estimate_state_bytes
+        optimiser_state_bytes = estimate_state_bytes(model.parameters())
+        estimated = report["total_parameters"] * bytes_per * 2 + optimiser_state_bytes
+        print(f"       factored optimizer state estimate {optimiser_state_bytes / 1e9:.3f} GB")
+        print(f"       weights + gradients + factored state {estimated / 1e9:.2f} GB")
+        if estimated > 13.5e9:
+            raise SystemExit(
+                f"estimated training tensors {estimated / 1e9:.2f} GB exceed the 13.5 GB safety cap")
+    else:
+        need = model.cfg.footprint_gb(bytes_per)
+        print(f"       AdamW training footprint {need:.2f} GB "
+              f"(weights + gradients + two optimiser states)")
+        if need > 14.0:
+            raise SystemExit(
+                f"this configuration needs {need:.1f} GB and the runner has 16 GB. "
+                f"Reduce --experts, or use --dtype bf16. Refusing to start a run "
+                f"that will be killed.")
 
-    optimiser = torch.optim.AdamW(model.parameters(), lr=args.lr,
-                                  betas=(0.9, 0.95), weight_decay=0.1)
+    if args.optimizer == "adafactor":
+        from factorized_adafactor import FactorizedAdafactor
+        optimiser = FactorizedAdafactor(
+            model.parameters(), lr=args.lr, weight_decay=0.0,
+            chunk_rows=64,
+        )
+    else:
+        optimiser = torch.optim.AdamW(model.parameters(), lr=args.lr,
+                                      betas=(0.9, 0.95), weight_decay=0.1)
     start_step = 0
     resume_payload = None
     resume_path = None
