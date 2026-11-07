@@ -16,7 +16,9 @@ class RealTextTests(unittest.TestCase):
    "negative_passages":[{"docid":"n1","text":"negative"}]})
   ev=candidate_pool([row])
   self.assertEqual(len(ev["doc_ids"]),2)
-  scores=torch.tensor([[.9,.1]])
+  scores=torch.zeros((1,len(ev["doc_ids"])))
+  scores[0,ev["doc_ids"].index("p1")]=.9
+  scores[0,ev["doc_ids"].index("n1")]=.1
   metrics=retrieval_metrics(scores,ev)
   self.assertEqual(metrics["mrr_at_10"],1.0)
  def test_phinc_dedup_and_document_disjoint_split(self):
