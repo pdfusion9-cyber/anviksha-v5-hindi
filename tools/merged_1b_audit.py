@@ -52,7 +52,8 @@ def main() -> int:
     report_dir.mkdir(parents=True, exist_ok=True)
     report: dict = {
         "experiment": "read-only merged-1b structural and inference audit",
-        "training_performed": False,\n        "balanced_routing_enabled_for_audit": True,
+        "training_performed": False,
+        "balanced_routing_enabled_for_audit": True,
         "source": {
             "merge_run_id": MERGE_RUN_ID,
             "artifact_id": MERGE_ARTIFACT_ID,
@@ -124,7 +125,9 @@ def main() -> int:
         ck = torch.load(
             ckpt_path, map_location="cpu", mmap=True, weights_only=True
         )
-        cfg_data = dict(ck["config"])\n        cfg_data["balanced_routing"] = True\n        cfg = MoEConfig(**cfg_data)
+        cfg_data = dict(ck["config"])
+        cfg_data["balanced_routing"] = True
+        cfg = MoEConfig(**cfg_data)
         state = ck["model"]
         counts = cfg.counts()
         report["architecture"] = {
