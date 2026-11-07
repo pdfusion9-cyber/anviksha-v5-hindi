@@ -55,6 +55,9 @@ class MoEConfig:
     top_k: int = 2
     ffn_mult: int = 4
     dropout: float = 0.0
+    # Batch-balanced dispatch; source checkpoints retain the default False.
+    balanced_routing: bool = False
+    min_gate_weight: float = 0.10
 
     @property
     def ffn(self) -> int:
@@ -85,6 +88,66 @@ class MoEConfig:
         active = active_per_layer * self.layers + embed
         return {"total": total, "active": active,
                 "per_expert": per_expert, "per_layer": per_layer}
+
+
+
+def balanced_topk_indices(logits: torch.Tensor, top_k: int) -> torch.Tensor:
+    """Capacity-balanced top-k routing with exact batch-level expert coverage.
+
+    Every token is assigned to top_k distinct experts. If tokens * top_k is at
+    least the expert count, each expert receives floor/ceil(tokens * top_k /
+    experts) assignments exactly. Each token prefers the highest-scoring
+    experts that still have quota. Small batches fall back to ordinary top-k.
+    """
+    if logits.ndim != 2:
+        raise ValueError(f"expected [tokens, experts] logits, got {tuple(logits.shape)}")
+    token_count, expert_count = logits.shape
+    if top_k < 1 or top_k >= expert_count:
+        raise ValueError(f"top_k must be in [1, {expert_count - 1}], got {top_k}")
+    if token_count == 0:
+        return torch.empty((0, top_k), dtype=torch.long, device=logits.device)
+
+    scores = logits.detach().float()
+    total_assignments = token_count * top_k
+    if total_assignments < expert_count:
+        return scores.topk(top_k, dim=-1).indices
+
+    base_quota, remainder = divmod(total_assignments, expert_count)
+    quotas = torch.full((expert_count,), base_quota, dtype=torch.long)
+    if remainder:
+        preferred = torch.argsort(scores.mean(dim=0).cpu(), descending=True)
+        quotas[preferred[:remainder]] += 1
+
+    remaining = quotas.tolist()
+    ranked_experts = torch.argsort(scores, dim=-1, descending=True).cpu().tolist()
+    if top_k == 1:
+        confidence = scores.max(dim=-1).values
+    else:
+        leading = scores.topk(top_k, dim=-1).values
+        confidence = leading[:, 0] - leading[:, -1]
+    token_order = torch.argsort(confidence, descending=True).cpu().tolist()
+
+    assigned = [[-1] * top_k for _ in range(token_count)]
+    for token_index in token_order:
+        chosen = set()
+        for slot in range(top_k):
+            selected = -1
+            for expert_index in ranked_experts[token_index]:
+                if expert_index not in chosen and remaining[expert_index] > 0:
+                    selected = expert_index
+                    break
+            if selected < 0:
+                raise RuntimeError(
+                    "balanced routing exhausted quotas before every token "
+                    "received distinct top-k assignments"
+                )
+            assigned[token_index][slot] = selected
+            chosen.add(selected)
+            remaining[selected] -= 1
+
+    if any(value != 0 for value in remaining):
+        raise RuntimeError("balanced routing left unfilled expert quotas")
+    return torch.tensor(assigned, dtype=torch.long, device=logits.device)
 
 
 class Attention(nn.Module):
@@ -141,9 +204,18 @@ class MoELayer(nn.Module):
         b, n, d = x.shape
         flat = self.norm(x).reshape(b * n, d)
         logits = self.router(flat)
-        probs = F.softmax(logits, dim=-1)
-        top_p, top_i = probs.topk(self.cfg.top_k, dim=-1)
-        top_p = top_p / top_p.sum(-1, keepdim=True).clamp(min=1e-9)
+        probs = F.softmax(logits.float(), dim=-1).to(logits.dtype)
+        if self.cfg.balanced_routing:
+            top_i = balanced_topk_indices(logits, self.cfg.top_k)
+            selected_logits = logits.gather(1, top_i)
+            top_p = F.softmax(selected_logits.float(), dim=-1)
+            floor = min(float(self.cfg.min_gate_weight), 1.0 / self.cfg.top_k)
+            top_p = top_p.clamp(min=floor)
+            top_p = top_p / top_p.sum(-1, keepdim=True).clamp(min=1e-9)
+            top_p = top_p.to(flat.dtype)
+        else:
+            top_p, top_i = probs.topk(self.cfg.top_k, dim=-1)
+            top_p = top_p / top_p.sum(-1, keepdim=True).clamp(min=1e-9)
 
         out = torch.zeros_like(flat)
         usage = torch.zeros(self.cfg.experts, device=flat.device)
