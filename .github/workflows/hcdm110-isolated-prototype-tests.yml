@@ -84,3 +84,9 @@ jobs:
       - name: Validate large-query paired evaluation
         run: |
           python research/hcdm110/test_large_query_eval.py
+      - name: Run licensed real-language retrieval benchmark
+        run: |
+          python research/hcdm110/benchmark_real_language_retrieval.py --out reports/hcdm110_realtext.json
+      - name: Validate real-language dataset pipeline
+        run: |
+          python research/hcdm110/test_real_language_retrieval.py
