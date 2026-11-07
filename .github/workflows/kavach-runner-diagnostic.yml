@@ -1,12 +1,7 @@
 name: kavach-runner-diagnostic
 
-on:
-  push:
-    branches:
-      - anviksha-safe-merge-20261106
-    paths:
-      - ".github/workflows/kavach-runner-diagnostic.yml"
-  workflow_dispatch:
+# Disabled: superseded by .github/workflows/kavach-unified.yml (single-run orchestration).
+on: {}
 
 permissions:
   contents: read
