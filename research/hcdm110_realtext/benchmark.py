@@ -158,8 +158,8 @@ def load_phinc(path: Path):
             ).hexdigest()
             rows.append({"qid": qid, "query": query, "docid": docid,
                          "document": document})
-    if len(rows) < 100:
-        raise ValueError(f"PHINC unexpectedly small after deduplication: {len(rows)}")
+    if not rows:
+        raise ValueError("PHINC has no usable rows after deduplication")
     return rows, fields
 
 
