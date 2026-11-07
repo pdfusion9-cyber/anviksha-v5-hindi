@@ -1,0 +1,48 @@
+name: merged-1b-isolated-audit
+
+on:
+  push:
+    branches:
+      - experiment/merged-1b-audit-20261107
+    paths:
+      - .github/workflows/merged-1b-audit.yml
+      - tools/merged_1b_audit.py
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --quiet numpy
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Download the immutable merged artifact from run 42342513329
+        uses: actions/download-artifact@v4
+        with:
+          name: merged-1b
+          path: artifact
+          run-id: 42342513329
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Verify artifact presence and run isolated structural, routing and continuation audit
+        run: |
+          set -eu
+          test -s artifact/merged.pt
+          test -s artifact/tokenizer.json
+          test -s artifact/summary.json
+          python tools/merged_1b_audit.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: merged-1b-audit-report
+          path: audit/merged_1b_audit.json
+          if-no-files-found: warn
