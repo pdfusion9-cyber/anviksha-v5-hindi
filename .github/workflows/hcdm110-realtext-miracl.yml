@@ -1,0 +1,37 @@
+name: hcdm110-realtext-miracl
+on:
+  push:
+    branches:
+      - experiment/hcdm110-realtext-miracl-20261107
+    paths:
+      - research/hcdm110_realtext/**
+      - .github/workflows/hcdm110-realtext-miracl.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-language-retrieval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned CPU dependencies
+        run: |
+          python -m pip install --no-cache-dir --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --no-cache-dir --quiet "datasets==3.6.0" "huggingface_hub==0.30.2" "pyarrow<20"
+      - name: Validate parsers and metrics
+        run: |
+          python research/hcdm110_realtext/test_benchmark.py
+      - name: Run MIRACL Hindi English and PHINC Hinglish retrieval
+        run: |
+          python research/hcdm110_realtext/benchmark.py --out reports/hcdm110_realtext_miracl.json --epochs 8 --active-k 32
+      - name: Upload aggregate report
+        uses: actions/upload-artifact@v4
+        with:
+          name: hcdm110-realtext-retrieval-report
+          path: reports/hcdm110_realtext_miracl.json
+          if-no-files-found: error
+          retention-days: 30
