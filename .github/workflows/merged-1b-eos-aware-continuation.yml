@@ -73,13 +73,13 @@ jobs:
             --init-from baseline/merged.pt \
             --tokenizer-from baseline/tokenizer.json \
             --vocab 8192 \
-            --dim 512 \
+            --dim 384 \
             --layers 8 \
-            --heads 8 \
+            --heads 6 \
             --experts 110 \
             --top-k 2 \
             --ffn-mult 4 \
-            --seq-len 192 \
+            --seq-len 256 \
             --batch 1 \
             --lr 0.000005 \
             --optimizer adafactor \
