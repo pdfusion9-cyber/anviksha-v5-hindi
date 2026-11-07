@@ -69,14 +69,29 @@ class AssociativeMemory:
             raise ValueError("values must have shape [N, value_dim]")
         if not torch.isfinite(keys).all() or not torch.isfinite(values).all():
             raise ValueError("memory input contains non-finite values")
+        count = int(keys.shape[0])
+        if count == 0:
+            return
         k = F.normalize(keys.detach().float().cpu(), dim=-1)
         v = values.detach().float().cpu()
-        for row in range(k.shape[0]):
-            self.keys[self.write_pos].copy_(k[row])
-            self.values[self.write_pos].copy_(v[row])
-            self.valid[self.write_pos] = True
-            self.write_pos = (self.write_pos + 1) % self.capacity
-            self.size = min(self.size + 1, self.capacity)
+
+        # Keep only the newest capacity entries if a single insertion is larger
+        # than the ring. Compute their correct final slots without repeated-index
+        # advanced assignment.
+        if count > self.capacity:
+            skipped = count - self.capacity
+            k = k[-self.capacity:]
+            v = v[-self.capacity:]
+            first_slot = (self.write_pos + skipped) % self.capacity
+            slots = (torch.arange(self.capacity) + first_slot) % self.capacity
+        else:
+            slots = (torch.arange(count) + self.write_pos) % self.capacity
+
+        self.keys.index_copy_(0, slots, k)
+        self.values.index_copy_(0, slots, v)
+        self.valid[slots] = True
+        self.write_pos = (self.write_pos + count) % self.capacity
+        self.size = min(self.capacity, self.size + count)
 
     @torch.no_grad()
     def retrieve(self, queries: torch.Tensor, top_k: int = 4):
