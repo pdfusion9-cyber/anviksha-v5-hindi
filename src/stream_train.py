@@ -16,6 +16,7 @@ and the chat learning rate as a fraction rather than a constant.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import time
@@ -101,7 +102,7 @@ class WindowStream:
     """
 
     def __init__(self, docs, tokenizer, seq_len: int, terms, buffer_windows=256,
-                 min_chars=20):
+                 min_chars=20, state: dict | None = None):
         self.docs = docs
         self.tok = tokenizer
         self.seq_len = seq_len
@@ -109,14 +110,58 @@ class WindowStream:
         self.buffer_windows = buffer_windows
         self.min_chars = min_chars
         self.buf: list[np.ndarray] = []
-        self.carry: list[int] = []      # leftover ids too few to fill a window
+        self.carry: list[int] = []
         self.docs_read = 0
         self.docs_dropped = 0
         self.tokens_seen = 0
         self.finished = False
+        self._skip_remaining = 0
+
+        if state is not None:
+            if int(state.get("seq_len", -1)) != self.seq_len:
+                raise ValueError("saved stream state has a different sequence length")
+            if int(state.get("buffer_windows", -1)) != self.buffer_windows:
+                raise ValueError("saved stream state has a different buffer size")
+            self.buf = [
+                np.asarray(row, dtype=np.int64)
+                for row in state.get("buffer", [])
+            ]
+            if any(row.shape != (self.seq_len + 1,) for row in self.buf):
+                raise ValueError("saved stream buffer contains an invalid window")
+            self.carry = [int(token) for token in state.get("carry", [])]
+            self.docs_read = int(state.get("docs_read", 0))
+            self.docs_dropped = int(state.get("docs_dropped", 0))
+            self.tokens_seen = int(state.get("tokens_seen", 0))
+            self.finished = bool(state.get("finished", False))
+            # The buffered windows and carry are restored verbatim. Skip only
+            # documents already consumed into those buffers before reading new
+            # input from the same fingerprinted corpus.
+            self._skip_remaining = 0 if self.finished else self.docs_read
+
+    def state_dict(self) -> dict:
+        return {
+            "seq_len": self.seq_len,
+            "buffer_windows": self.buffer_windows,
+            "buffer": [row.tolist() for row in self.buf],
+            "carry": list(self.carry),
+            "docs_read": self.docs_read,
+            "docs_dropped": self.docs_dropped,
+            "tokens_seen": self.tokens_seen,
+            "finished": self.finished,
+        }
 
     def _refill(self):
         while len(self.buf) < self.buffer_windows and not self.finished:
+            while self._skip_remaining:
+                try:
+                    next(self.docs)
+                except StopIteration:
+                    self._skip_remaining = 0
+                    self.finished = True
+                    break
+                self._skip_remaining -= 1
+            if self.finished:
+                break
             try:
                 doc = next(self.docs)
             except StopIteration:
@@ -127,14 +172,22 @@ class WindowStream:
                 self.docs_dropped += 1
                 continue
             if isinstance(doc, (list, tuple)):
-                # already tokenised: the vocabulary corpus is ids, not text,
-                # because the tokenizer that would produce them is missing
                 ids = list(doc)
             else:
                 if self.terms and blocked(doc, self.terms):
                     self.docs_dropped += 1
                     continue
                 ids = self.tok.encode(doc)
+
+            # Every independent source document ends with EOS. This teaches
+            # the model where one document stops instead of blending adjacent
+            # documents into one uninterrupted stream.
+            eos_id = getattr(self.tok, "eos", None)
+            if eos_id is None:
+                raise ValueError("tokenizer must expose an EOS token id")
+            if not ids or int(ids[-1]) != int(eos_id):
+                ids.append(int(eos_id))
+
             self.tokens_seen += len(ids)
             self.carry.extend(ids)
             n = self.seq_len + 1
@@ -154,6 +207,65 @@ class WindowStream:
             if i < len(self.buf):
                 self.buf.pop(i)
         return np.stack(rows)
+
+
+def sha256_file(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def checkpoint_step(state: dict) -> int:
+    top_level = state.get("step")
+    extra_step = (state.get("extra") or {}).get("step")
+    if top_level is not None and extra_step is not None:
+        if int(top_level) != int(extra_step):
+            raise ValueError(
+                f"checkpoint step fields disagree: top-level={top_level}, "
+                f"extra.step={extra_step}"
+            )
+    value = top_level if top_level is not None else extra_step
+    return int(value or 0)
+
+
+def restore_training_checkpoint(
+    payload: dict,
+    model: MoELM,
+    optimiser: torch.optim.Optimizer,
+    require_optimiser_state: bool,
+) -> int:
+    if not isinstance(payload, dict) or "model" not in payload:
+        raise ValueError("checkpoint does not contain a model state")
+    saved_config = payload.get("config") or {}
+    expected_config = model.cfg.__dict__
+    for key in (
+        "vocab", "dim", "layers", "heads", "seq_len", "experts",
+        "top_k", "ffn_mult",
+    ):
+        if key in saved_config and saved_config[key] != expected_config[key]:
+            raise ValueError(
+                f"checkpoint configuration mismatch for {key}: "
+                f"{saved_config[key]} != {expected_config[key]}"
+            )
+    model.load_state_dict(payload["model"], strict=True)
+    step = checkpoint_step(payload)
+
+    optimiser_state = payload.get("optimiser")
+    if require_optimiser_state and not isinstance(optimiser_state, dict):
+        raise ValueError(
+            "resume checkpoint has no optimiser state; refusing to silently "
+            "restart AdamW moments"
+        )
+    if optimiser_state is not None:
+        try:
+            optimiser.load_state_dict(optimiser_state)
+        except Exception as exc:
+            raise ValueError(
+                f"optimiser state could not be restored: {type(exc).__name__}: {exc}"
+            ) from exc
+    return step
 
 
 def build_model(vocab: int, args) -> MoELM:
@@ -297,34 +409,62 @@ def main() -> None:
             f"Reduce --experts, or use --dtype bf16. Refusing to start a run "
             f"that will be killed.")
 
-    start_step = 0
-    if args.init_from and args.init_from.is_file():
-        state = torch.load(args.init_from, weights_only=False)
-        model.load_state_dict(state["model"])
-        start_step = int(state.get("extra", {}).get("step", 0))
-        print(f"resumed from {args.init_from} at step {start_step}")
-
     optimiser = torch.optim.AdamW(model.parameters(), lr=args.lr,
                                   betas=(0.9, 0.95), weight_decay=0.1)
-    # Resume the optimiser too. A free GPU session ends at twelve hours; without
-    # this the moments restart every session and the loss curve hides it.
+    start_step = 0
+    resume_payload = None
+    resume_path = None
+
     if args.resume:
-        ck = args.out / "chat.pt"
-        if ck.is_file():
-            prev = torch.load(ck, weights_only=False)
-            if prev.get("optimiser"):
-                try:
-                    optimiser.load_state_dict(prev["optimiser"])
-                    start_step = max(start_step, int(prev.get("step", 0)))
-                    print(f"resumed optimiser and step {start_step:,} from {ck}")
-                except Exception as e:
-                    print(f"optimiser state did not load ({type(e).__name__}); "
-                          f"continuing with fresh moments, which costs training "
-                          f"time and is worth knowing about")
-            else:
-                print("checkpoint carries no optimiser state")
+        output_checkpoint = args.out / "chat.pt"
+        if output_checkpoint.is_file():
+            resume_path = output_checkpoint
+        elif args.init_from is not None and args.init_from.is_file():
+            resume_path = args.init_from
         else:
-            print(f"--resume given but {ck} does not exist; starting fresh")
+            raise SystemExit(
+                "--resume requires either --out/chat.pt or an existing --init-from checkpoint"
+            )
+        sidecar_tokenizer = resume_path.parent / "tokenizer.json"
+        if sidecar_tokenizer.is_file() and sidecar_tokenizer.read_bytes() != tok_path.read_bytes():
+            raise SystemExit(
+                f"checkpoint tokenizer does not match the active tokenizer: {sidecar_tokenizer}"
+            )
+        resume_payload = torch.load(
+            resume_path, map_location="cpu", weights_only=False
+        )
+        try:
+            start_step = restore_training_checkpoint(
+                resume_payload, model, optimiser, require_optimiser_state=True
+            )
+        except Exception as exc:
+            raise SystemExit(
+                f"refusing unsafe resume from {resume_path}: {type(exc).__name__}: {exc}"
+            ) from exc
+        print(
+            f"resumed model + AdamW state + global step {start_step:,} "
+            f"from {resume_path}"
+        )
+    elif args.init_from is not None and args.init_from.is_file():
+        resume_path = args.init_from
+        sidecar_tokenizer = resume_path.parent / "tokenizer.json"
+        if sidecar_tokenizer.is_file() and sidecar_tokenizer.read_bytes() != tok_path.read_bytes():
+            raise SystemExit(
+                f"checkpoint tokenizer does not match the active tokenizer: {sidecar_tokenizer}"
+            )
+        resume_payload = torch.load(
+            resume_path, map_location="cpu", weights_only=False
+        )
+        try:
+            start_step = restore_training_checkpoint(
+                resume_payload, model, optimiser, require_optimiser_state=False
+            )
+        except Exception as exc:
+            raise SystemExit(
+                f"refusing incompatible initialization from {resume_path}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        print(f"initialized weights from {resume_path} at global step {start_step:,}")
     epochs = max(1, int(getattr(args, "epochs", 1)))
     if epochs > 1:
         print(f"corpus repeated {epochs} times: a budget larger than the "
@@ -345,18 +485,87 @@ def main() -> None:
               if args.pretokenized
               else stream_documents(args.text, limit=args.max_docs or None,
                                     epochs=epochs))
-    stream = WindowStream(source,
-                          tokenizer, args.seq_len, terms,
-                          buffer_windows=args.buffer_windows)
+    corpus_sha256 = sha256_file(args.text)
+    resume_extra = (resume_payload.get("extra", {}) if resume_payload else {}) or {}
+    saved_stream_state = resume_extra.get("window_stream")
+    saved_corpus_sha256 = resume_extra.get("corpus_sha256")
+    if args.resume and (saved_stream_state is None) != (saved_corpus_sha256 is None):
+        raise SystemExit(
+            "resume checkpoint has incomplete stream metadata; refusing a partial data resume"
+        )
+
+    rng = np.random.default_rng(7)
+    if args.resume and saved_stream_state is not None:
+        if saved_corpus_sha256 != corpus_sha256:
+            raise SystemExit(
+                "training corpus fingerprint changed since the checkpoint; "
+                "refusing to resume on a different document stream"
+            )
+        if int(resume_extra.get("stream_epochs", -1)) != epochs:
+            raise SystemExit(
+                "training epoch count changed since the checkpoint; refusing an inexact resume"
+            )
+        if "rng_state" not in resume_extra:
+            raise SystemExit("resume checkpoint is missing the sampler RNG state")
+        rng.bit_generator.state = resume_extra["rng_state"]
+        stream = WindowStream(
+            source, tokenizer, args.seq_len, terms,
+            buffer_windows=args.buffer_windows, state=saved_stream_state
+        )
+        resume_policy = "exact_stream_and_optimizer_resume"
+    else:
+        stream = WindowStream(
+            source, tokenizer, args.seq_len, terms,
+            buffer_windows=args.buffer_windows
+        )
+        resume_policy = (
+            "legacy_checkpoint_weights_optimizer_resumed_data_restarts_at_corpus_start"
+            if args.resume else "fresh_stream"
+        )
+
     replay_stream = None
+    replay_corpus_sha256 = None
     if args.replay_fraction > 0:
         if args.replay_text is None or not args.replay_text.is_file():
             raise SystemExit("--replay-fraction set but --replay-text is missing")
-        replay_stream = WindowStream(
-            stream_documents(args.replay_text), tokenizer, args.seq_len, terms,
-            buffer_windows=args.buffer_windows)
+        replay_corpus_sha256 = sha256_file(args.replay_text)
+        saved_replay_state = resume_extra.get("replay_stream")
+        saved_replay_sha = resume_extra.get("replay_corpus_sha256")
+        if args.resume and saved_replay_state is not None:
+            if saved_replay_sha != replay_corpus_sha256:
+                raise SystemExit("replay corpus fingerprint changed since checkpoint")
+            replay_stream = WindowStream(
+                stream_documents(args.replay_text), tokenizer, args.seq_len, terms,
+                buffer_windows=args.buffer_windows, state=saved_replay_state
+            )
+        elif args.resume and resume_extra.get("replay_fraction", 0):
+            raise SystemExit("resume checkpoint has no replay stream state")
+        else:
+            replay_stream = WindowStream(
+                stream_documents(args.replay_text), tokenizer, args.seq_len, terms,
+                buffer_windows=args.buffer_windows
+            )
         print(f"replay: {args.replay_fraction:.0%} of each batch from "
               f"{args.replay_text}")
+
+    def checkpoint_extra():
+        extra = {
+            "step": step,
+            "docs_read": stream.docs_read,
+            "tokens_seen": stream.tokens_seen,
+            "nan_skipped": nan_skipped,
+            "expert_usage": model.expert_usage(),
+            "window_stream": stream.state_dict(),
+            "corpus_sha256": corpus_sha256,
+            "stream_epochs": epochs,
+            "rng_state": rng.bit_generator.state,
+            "resume_policy": resume_policy,
+            "replay_fraction": args.replay_fraction,
+        }
+        if replay_stream is not None:
+            extra["replay_stream"] = replay_stream.state_dict()
+            extra["replay_corpus_sha256"] = replay_corpus_sha256
+        return extra
 
     started = time.time()
     budget = args.clock_budget_minutes * 60
@@ -366,7 +575,13 @@ def main() -> None:
     losses: list[float] = []
 
     print(f"streaming from {args.text}; clock budget {args.clock_budget_minutes:g} min")
-    while step - start_step < args.steps:
+    while True:
+        if args.target_steps > 0:
+            if step >= args.target_steps:
+                print(f"absolute target reached: {step:,}/{args.target_steps:,}")
+                break
+        elif step - start_step >= args.steps:
+            break
         if time.time() - started > budget:
             print("clock budget reached")
             break
@@ -418,19 +633,17 @@ def main() -> None:
 
         if step % args.checkpoint_every == 0:
             save(model, tokenizer, args.out / "chat.pt", args,
-                 {"step": step, "docs_read": stream.docs_read,
-                  "tokens_seen": stream.tokens_seen,
-                  "nan_skipped": nan_skipped,
-                  "expert_usage": model.expert_usage()},
-                 optimiser=optimiser, step=step)
+                 checkpoint_extra(), optimiser=optimiser, step=step)
 
-    final = {"step": step, "docs_read": stream.docs_read,
-             "tokens_seen": stream.tokens_seen, "docs_dropped": stream.docs_dropped,
-             "nan_skipped": nan_skipped, "replay_windows": replay_tokens,
-             "expert_usage": model.expert_usage(),
-             "parameters": report["total_parameters"],
-             "active_parameters": report["active_parameters"],
-             "seconds": round(time.time() - started, 1)}
+    final = checkpoint_extra()
+    final.update({
+        "docs_dropped": stream.docs_dropped,
+        "replay_windows": replay_tokens,
+        "parameters": report["total_parameters"],
+        "active_parameters": report["active_parameters"],
+        "seconds": round(time.time() - started, 1),
+        "corpus_path": str(args.text),
+    })
     save(model, tokenizer, args.out / "chat.pt", args, final,
          optimiser=optimiser, step=step)
     (args.out / "stream_report.json").write_text(json.dumps(final, indent=2))
