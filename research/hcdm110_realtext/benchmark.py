@@ -308,6 +308,11 @@ def evaluate_task(name, fit_pairs, validation, test, seed, epochs, active_k):
     test_qids = set(test["query_ids"])
     if fit_qids & val_qids or fit_qids & test_qids or val_qids & test_qids:
         raise ValueError(name + ": query split leakage")
+    fit_docids = {x["docid"] for x in fit_pairs}
+    val_docids = set(validation["doc_ids"])
+    test_docids = set(test["doc_ids"])
+    if fit_docids & val_docids or fit_docids & test_docids:
+        raise ValueError(name + ": training passage overlaps evaluation candidates")
     model, training = train_encoder(fit_pairs, seed, epochs, active_k)
     weight, val_metrics = choose_fusion_weight(validation, model)
     raw_scores = score_matrix(test)
@@ -352,14 +357,19 @@ def main():
         fit_pairs = training_pairs(fit_rows)
         validation = candidate_pool(validation_rows)
         test = candidate_pool(dev_rows)
+        # Remove any fit passage that appears in either evaluation candidate pool.
+        evaluation_docids = set(validation["doc_ids"]) | set(test["doc_ids"])
+        fit_pairs = [pair for pair in fit_pairs if pair["docid"] not in evaluation_docids]
         tasks.append(evaluate_task(task_name, fit_pairs, validation, test,
                                    args.seed, args.epochs, args.active_k))
         audits[task_name] = {
             "train_queries_total": len(train_rows), "fit_queries": len(fit_rows),
             "validation_queries": len(validation_rows), "official_dev_test_queries": len(dev_rows),
+            "fit_pairs_after_document_overlap_filter": len(fit_pairs),
             "validation_candidates": len(validation["doc_ids"]),
             "test_candidates": len(test["doc_ids"]),
             "official_split_use": "train qids split into fit/validation; official dev reserved for test",
+            "fit_document_overlap_with_validation_or_test": 0,
         }
 
     phinc_path = args.workdir / "PHINC.csv"
