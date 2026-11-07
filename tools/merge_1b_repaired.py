@@ -165,7 +165,7 @@ def main() -> None:
         del incoming
         if source_copy > 0:
             import shutil
-            shutil.rmtree(Path(f"copies/{source_copy}"))
+            shutil.rmtree(source_dirs[source_copy])
         print(
             f"copy {source_copy}: added "
             f"{report['copies'][-1]['experts_added_per_layer']} experts/layer; "
