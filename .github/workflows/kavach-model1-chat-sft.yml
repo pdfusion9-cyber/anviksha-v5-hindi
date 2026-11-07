@@ -2,27 +2,8 @@ name: kavach-model1-chat-sft
 
 # Supervised chat adaptation is a separate candidate. The merged base artifact
 # remains immutable; only the candidate is evaluated by the guarded smoke job.
-on:
-  push:
-    branches:
-      - anviksha-safe-merge-20261106
-    paths:
-      - ".github/workflows/kavach-model1-chat-sft.yml"
-      - "src/moe_sft.py"
-  workflow_dispatch:
-    inputs:
-      base_run_id:
-        description: "successful merge-five run containing hindi_five.pt and tokenizer.json"
-        required: true
-        default: "42233090777"
-      steps:
-        description: "answer-only SFT optimizer steps; 0 means one full shuffled epoch"
-        required: true
-        default: "0"
-      learning_rate:
-        description: "conservative SFT learning rate"
-        required: true
-        default: "0.00002"
+# Disabled: superseded by .github/workflows/kavach-unified.yml (single-run orchestration).
+on: {}
 
 permissions:
   actions: read
