@@ -111,6 +111,37 @@ jobs:
           print("heldout after:", r["heldout_answer_loss_after"])
           print("candidate:", r["parameters"], "parameters")
           PY
+      - name: Quantize this exact SFT candidate to packed INT4
+        run: |
+          python src/int4_checkpoint.py quantize \
+            --input runs/kavach_model1_chat_sft.pt \
+            --output runs/kavach_model1_chat_sft.int4.pt \
+            --tokenizer base/tokenizer.json --group-size 128
+          python src/int4_checkpoint.py verify \
+            --input runs/kavach_model1_chat_sft.int4.pt \
+            | tee runs/kavach_model1_int4_verify.json
+          python src/int4_checkpoint.py dequantize \
+            --input runs/kavach_model1_chat_sft.int4.pt \
+            --output runs/kavach_model1_chat_sft.int4_dequant.pt \
+            | tee runs/kavach_model1_int4_dequant.json
+      - name: Strict-load and run six guarded prompts on INT4-dequantized weights
+        run: |
+          python src/evaluate_kavach_model1.py \
+            --checkpoint runs/kavach_model1_chat_sft.int4_dequant.pt \
+            --tokenizer base/tokenizer.json \
+            --max-new-tokens 48 \
+            --out runs/kavach_model1_int4_smoke.json
+      - name: Upload INT4 checkpoint and real inference reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kavach-model1-chat-sft-int4-and-smoke
+          path: |
+            runs/kavach_model1_chat_sft.int4.pt
+            runs/kavach_model1_int4_verify.json
+            runs/kavach_model1_int4_dequant.json
+            runs/kavach_model1_int4_smoke.json
+          if-no-files-found: warn
       - name: Upload candidate and SFT report
         if: always()
         uses: actions/upload-artifact@v4
