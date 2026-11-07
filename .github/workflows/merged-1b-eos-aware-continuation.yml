@@ -78,6 +78,7 @@ jobs:
             --heads 6 \
             --experts 110 \
             --top-k 2 \
+            --balanced-routing \
             --ffn-mult 4 \
             --seq-len 256 \
             --batch 1 \
