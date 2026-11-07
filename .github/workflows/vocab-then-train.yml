@@ -1,0 +1,184 @@
+name: vocab-then-train
+
+# Teach the vocabulary, then train on content. Measured before building it.
+#
+# The 1.05B model answers "32" to every question. That is what a model does when
+# the only thing it has learned is which token is most common. On a small model
+# the same failure was cured by teaching the vocabulary first:
+#
+#     a model stuck at 2 distinct predictions out of 64 became 56 after
+#     vocabulary training, and content learning afterwards was better at every
+#     step count measured -- +1.20 at 20 steps, +0.51 at 50, +0.18 at 150.
+#
+# The gain is largest when content is scarce, which is exactly this project: 50M
+# tokens against a requirement of 21B.
+#
+# Two phases, one job, no chaining:
+#
+#   warm-up   the corpus is token ids, not text, because the tokenizer that would
+#             turn text into these ids is missing. Every id 0..8191 appears in
+#             counting order, strides, reversals, runs, pairs and random walks.
+#   content   the domain corpus, streamed with every epoch the file allows, for
+#             the whole clock budget.
+#
+# Deliberately no self-chaining: the chain that used `always()` respawned itself
+# on cancellation and produced 196 runs out of five copies. This workflow ends
+# when the job ends.
+
+on:
+  workflow_dispatch:
+    inputs:
+      copy:
+        description: "0..4"
+        required: true
+        default: "0"
+      domain:
+        description: "crypto, network, application, incident or governance"
+        required: true
+        default: "crypto"
+      warmup-minutes:
+        description: "minutes for the vocabulary phase"
+        required: true
+        default: "60"
+      train-minutes:
+        description: "minutes for the content phase"
+        required: true
+        default: "240"
+      resume-run-id:
+        description: "run holding the checkpoint to continue from, empty to start fresh"
+        required: false
+        default: ""
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --quiet numpy
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          python -c "import numpy, torch; print('torch', torch.__version__)"
+
+      - name: Bring the previous checkpoint, if there is one
+        if: inputs.resume-run-id != ''
+        uses: actions/download-artifact@v4
+        with:
+          pattern: segment-*
+          path: prev
+          run-id: ${{ inputs.resume-run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+
+      - name: Build the content corpus and the tokenizer
+        run: |
+          python src/fetch_security_corpus.py --out data/security_corpus \
+            --max-docs 400000 --doc-chars 4000 --max-shards 40
+          test -s data/security_corpus/corpus.jsonl || { echo "empty corpus"; exit 1; }
+          python src/split_security.py data/security_corpus/corpus.jsonl
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "src")
+          from pathlib import Path
+          from bpe_tokenizer import BPETokenizer
+          parts = sorted(Path("data/security").glob("copy_*.txt"))
+          text = "\n\n".join(p.read_text(encoding="utf-8") for p in parts)
+          tok = BPETokenizer.train(text[:8_000_000], vocab_size=8192)
+          Path("shared").mkdir(exist_ok=True)
+          tok.save(Path("shared/tokenizer.json"))
+          print(f"tokenizer {tok.size} entries")
+          assert tok.size == 8192, f"vocabulary is {tok.size}, the model needs 8192"
+          PY
+
+      - name: Build the vocabulary corpus
+        run: |
+          python src/vocab_corpus.py --vocab 8192 --seq 256 --repeat 60 \
+            --out data/vocab_corpus.txt
+          wc -l data/vocab_corpus.txt
+
+      - name: Prepare the starting weights
+        run: |
+          set -eu
+          PREV=""
+          if [ -n "${{ inputs.resume-run-id }}" ]; then
+            PREV=$(find prev -name chat.pt | head -1 || true)
+            echo "previous checkpoint: ${PREV:-none}"
+          fi
+          if [ -n "$PREV" ]; then
+            python src/segment_setup.py --out shared/init.pt --previous "$PREV" \
+              --vocab 8192 --dim 384 --layers 8 --heads 6 --experts 22 \
+              --ffn 4 --seq-len 256
+          else
+            python src/segment_setup.py --out shared/init.pt \
+              --vocab 8192 --dim 384 --layers 8 --heads 6 --experts 22 \
+              --ffn 4 --seq-len 256
+          fi
+
+      - name: Phase 1 - teach the vocabulary
+        run: |
+          set -eu
+          C="${{ inputs.copy }}"
+          mkdir -p "runs/copy_$C"
+          echo "vocabulary warm-up, ${{ inputs.warmup-minutes }} minutes"
+          python src/stream_train.py \
+            --text data/vocab_corpus.txt \
+            --out "runs/copy_$C" \
+            --init-from shared/init.pt \
+            --tokenizer-from shared/tokenizer.json \
+            --pretokenized \
+            --vocab 8192 --dim 384 --layers 8 --heads 6 \
+            --experts 22 --top-k 2 --ffn-mult 4 \
+            --seq-len 256 --batch 8 \
+            --dtype fp32 --threads 4 \
+            --clock-budget-minutes ${{ inputs.warmup-minutes }} \
+            --checkpoint-every 25
+
+      - name: Phase 2 - train on the domain corpus
+        run: |
+          set -eu
+          C="${{ inputs.copy }}"
+          D="${{ inputs.domain }}"
+          CORPUS="data/security/copy_${D}.txt"
+          test -s "$CORPUS" || { echo "no corpus for $D"; exit 1; }
+          echo "content training, ${{ inputs.train-minutes }} minutes on $D"
+          echo "corpus $(wc -c < "$CORPUS") bytes"
+          python src/stream_train.py \
+            --text "$CORPUS" \
+            --out "runs/copy_$C" \
+            --init-from "runs/copy_$C/chat.pt" \
+            --tokenizer-from shared/tokenizer.json \
+            --vocab 8192 --dim 384 --layers 8 --heads 6 \
+            --experts 22 --top-k 2 --ffn-mult 4 \
+            --seq-len 256 --batch 8 \
+            --dtype fp32 --threads 4 \
+            --clock-budget-minutes ${{ inputs.train-minutes }} \
+            --epochs 40 \
+            --content-filter \
+            --checkpoint-every 25
+
+      - name: Measure how far it moved
+        if: always()
+        run: |
+          if [ -f "runs/copy_${{ inputs.copy }}/chat.pt" ]; then
+            python src/expert_divergence.py \
+              --a shared/init.pt \
+              --b "runs/copy_${{ inputs.copy }}/chat.pt" \
+              --init shared/init.pt \
+              --out "runs/copy_${{ inputs.copy }}/divergence.json" || true
+            cat "runs/copy_${{ inputs.copy }}/stream_report.json" 2>/dev/null || true
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: segment-${{ inputs.copy }}-${{ github.run_id }}
+          path: runs/copy_${{ inputs.copy }}/
+          if-no-files-found: warn

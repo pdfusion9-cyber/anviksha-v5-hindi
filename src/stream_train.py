@@ -126,10 +126,15 @@ class WindowStream:
             if len(doc) < self.min_chars:
                 self.docs_dropped += 1
                 continue
-            if self.terms and blocked(doc, self.terms):
-                self.docs_dropped += 1
-                continue
-            ids = self.tok.encode(doc)
+            if isinstance(doc, (list, tuple)):
+                # already tokenised: the vocabulary corpus is ids, not text,
+                # because the tokenizer that would produce them is missing
+                ids = list(doc)
+            else:
+                if self.terms and blocked(doc, self.terms):
+                    self.docs_dropped += 1
+                    continue
+                ids = self.tok.encode(doc)
             self.tokens_seen += len(ids)
             self.carry.extend(ids)
             n = self.seq_len + 1
@@ -200,6 +205,10 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=1000000)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--clock-budget-minutes", type=float, default=120.0)
+    ap.add_argument("--pretokenized", action="store_true",
+                    help="the corpus holds space-separated token ids, one "
+                         "sequence per line, not text. Used for vocabulary "
+                         "warm-up, where the ids are the lesson")
     ap.add_argument("--epochs", type=int, default=1,
                     help="how many times to read the corpus. Raise it when the "
                          "token budget is larger than the corpus, which is the "
@@ -321,8 +330,22 @@ def main() -> None:
         print(f"corpus repeated {epochs} times: a budget larger than the "
               f"corpus needs repetition, and repetition past a few passes "
               f"teaches the text rather than the pattern")
-    stream = WindowStream(stream_documents(args.text, limit=args.max_docs or None,
-                                           epochs=epochs),
+    def pretokenized_documents(path, limit=None, epochs=1):
+        for _ in range(max(1, epochs)):
+            with path.open(encoding="utf-8") as f:
+                for i, line in enumerate(f):
+                    if limit and i >= limit:
+                        return
+                    line = line.strip()
+                    if line:
+                        yield [int(x) for x in line.split()]
+
+    source = (pretokenized_documents(args.text, limit=args.max_docs or None,
+                                     epochs=epochs)
+              if args.pretokenized
+              else stream_documents(args.text, limit=args.max_docs or None,
+                                    epochs=epochs))
+    stream = WindowStream(source,
                           tokenizer, args.seq_len, terms,
                           buffer_windows=args.buffer_windows)
     replay_stream = None
