@@ -37,7 +37,7 @@ on:
         required: true
         default: "crypto"
       warmup-minutes:
-        description: "minutes for the vocabulary phase"
+        description: "minutes for the vocabulary phase; 0 skips it"
         required: true
         default: "60"
       train-minutes:
@@ -123,6 +123,7 @@ jobs:
           fi
 
       - name: Phase 1 - teach the vocabulary
+        if: inputs.warmup-minutes != '0'
         run: |
           set -eu
           C="${{ inputs.copy }}"
@@ -137,7 +138,7 @@ jobs:
             --vocab 8192 --dim 384 --layers 8 --heads 6 \
             --experts 22 --top-k 2 --ffn-mult 4 \
             --seq-len 256 --batch 8 \
-            --dtype fp32 --threads 4 \
+            --dtype fp32 --threads 2 \
             --clock-budget-minutes ${{ inputs.warmup-minutes }} \
             --checkpoint-every 25
 
@@ -150,15 +151,18 @@ jobs:
           test -s "$CORPUS" || { echo "no corpus for $D"; exit 1; }
           echo "content training, ${{ inputs.train-minutes }} minutes on $D"
           echo "corpus $(wc -c < "$CORPUS") bytes"
+          INIT="runs/copy_$C/chat.pt"
+          if [ ! -f "$INIT" ]; then INIT="shared/init.pt"; fi
+          echo "starting from $INIT"
           python src/stream_train.py \
             --text "$CORPUS" \
             --out "runs/copy_$C" \
-            --init-from "runs/copy_$C/chat.pt" \
+            --init-from "$INIT" \
             --tokenizer-from shared/tokenizer.json \
             --vocab 8192 --dim 384 --layers 8 --heads 6 \
             --experts 22 --top-k 2 --ffn-mult 4 \
             --seq-len 256 --batch 8 \
-            --dtype fp32 --threads 4 \
+            --dtype fp32 --threads 2 \
             --clock-budget-minutes ${{ inputs.train-minutes }} \
             --epochs 40 \
             --content-filter \
