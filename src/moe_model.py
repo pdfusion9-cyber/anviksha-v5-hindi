@@ -79,12 +79,15 @@ class MoEConfig:
         attn = 4 * self.dim * self.dim
         per_expert = 2 * self.dim * self.ffn
         moe = self.experts * per_expert
+        router = self.experts * self.dim
         norms = 4 * self.dim
-        per_layer = attn + moe + norms
+        # Router logits are computed for every expert on every token, so the
+        # full router matrix is both stored and active even with sparse Top-K FFNs.
+        per_layer = attn + moe + router + norms
         body = per_layer * self.layers
         embed = self.vocab * self.dim
         total = body + embed + self.seq_len * self.dim + 2 * self.dim
-        active_per_layer = attn + self.top_k * per_expert + norms
+        active_per_layer = attn + self.top_k * per_expert + router + norms
         active = active_per_layer * self.layers + embed
         return {"total": total, "active": active,
                 "per_expert": per_expert, "per_layer": per_layer}
