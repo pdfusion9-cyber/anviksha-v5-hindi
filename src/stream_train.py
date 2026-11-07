@@ -449,7 +449,7 @@ def main() -> None:
                 f"checkpoint tokenizer does not match the active tokenizer: {sidecar_tokenizer}"
             )
         resume_payload = torch.load(
-            resume_path, map_location="cpu", weights_only=False
+            resume_path, map_location="cpu", mmap=True, weights_only=False
         )
         try:
             start_step = restore_training_checkpoint(
@@ -471,7 +471,7 @@ def main() -> None:
                 f"checkpoint tokenizer does not match the active tokenizer: {sidecar_tokenizer}"
             )
         resume_payload = torch.load(
-            resume_path, map_location="cpu", weights_only=False
+            resume_path, map_location="cpu", mmap=True, weights_only=False
         )
         try:
             start_step = restore_training_checkpoint(
