@@ -2,29 +2,8 @@ name: kavach-model1-sft-smoke
 
 # Test the immutable SFT candidate through the exact guarded Model 1 adapter.
 # The base artifact supplies the matching tokenizer; no checkpoint is replaced.
-on:
-  push:
-    branches:
-      - anviksha-safe-merge-20261106
-    paths:
-      - ".github/workflows/kavach-model1-sft-smoke.yml"
-      - "src/evaluate_kavach_model1.py"
-      - "src/kavach_model1.py"
-      - "src/int4_checkpoint.py"
-  workflow_dispatch:
-    inputs:
-      sft_run_id:
-        description: "Successful SFT run containing kavach-model1-chat-sft-candidate"
-        required: true
-        default: "42243800814"
-      base_run_id:
-        description: "Successful merge-five run containing matching base tokenizer"
-        required: true
-        default: "42233090777"
-      max_new_tokens:
-        description: "Maximum generation tokens per prompt"
-        required: true
-        default: "48"
+# Disabled: superseded by .github/workflows/kavach-unified.yml (single-run orchestration).
+on: {}
 
 permissions:
   actions: read
