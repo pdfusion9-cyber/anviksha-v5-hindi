@@ -52,7 +52,7 @@ def main() -> int:
     report_dir.mkdir(parents=True, exist_ok=True)
     report: dict = {
         "experiment": "read-only merged-1b structural and inference audit",
-        "training_performed": False,
+        "training_performed": False,\n        "balanced_routing_enabled_for_audit": True,
         "source": {
             "merge_run_id": MERGE_RUN_ID,
             "artifact_id": MERGE_ARTIFACT_ID,
@@ -124,7 +124,7 @@ def main() -> int:
         ck = torch.load(
             ckpt_path, map_location="cpu", mmap=True, weights_only=True
         )
-        cfg = MoEConfig(**ck["config"])
+        cfg = MoEConfig(**ck["config"], balanced_routing=True)
         state = ck["model"]
         counts = cfg.counts()
         report["architecture"] = {
@@ -283,10 +283,49 @@ def main() -> int:
             "all_roundtrips_exact": all(x["exact_roundtrip"] for x in roundtrips),
         }
 
-        # One prompt forward per probe records the experts actually selected.
+        # Explicit batch-coverage probe: 55 prompt rows x 32 positions x top-2
+        # = 3,520 assignments per layer, enough to give every one of 110 experts
+        # work. The 55 rows are a repeated, mixed Hindi/English security prompt
+        # set; this is a routing-coverage test, not a language-quality metric.
+        coverage_ids = []
+        for i in range(55):
+            ids = tokenizer.encode(PROMPTS[i % len(PROMPTS)])[:32]
+            ids = ids + [tokenizer.eos] * (32 - len(ids))
+            coverage_ids.append(ids)
+        coverage_batch = torch.tensor(coverage_ids, dtype=torch.long)
+        coverage_usage = []
+        torch.set_num_threads(2)
+        with torch.inference_mode():
+            coverage_logits = model(coverage_batch)
+            if not bool(torch.isfinite(coverage_logits).all()):
+                raise RuntimeError("balanced coverage batch produced non-finite logits")
+            for li, block in enumerate(model.blocks):
+                usage = block["moe"].last_usage.detach().cpu().tolist()
+                coverage_usage.append({
+                    "layer": li,
+                    "active_experts": sum(n > 0 for n in usage),
+                    "assignments": int(sum(usage)),
+                    "min_assignments_per_expert": int(min(usage)),
+                    "max_assignments_per_expert": int(max(usage)),
+                    "per_expert_assignments": [int(n) for n in usage],
+                })
+        report["balanced_batch_coverage"] = {
+            "batch_sequences": 55,
+            "sequence_length": 32,
+            "top_k": cfg.top_k,
+            "expected_assignments_per_layer": 55 * 32 * cfg.top_k,
+            "all_layers_use_all_experts": all(
+                x["active_experts"] == cfg.experts for x in coverage_usage
+            ),
+            "per_layer": coverage_usage,
+        }
+        if not report["balanced_batch_coverage"]["all_layers_use_all_experts"]:
+            raise RuntimeError("balanced routing failed full 110-expert batch coverage")
+
+        # Single-prompt greedy continuations remain ordinary top-k because a
+        # one-sequence batch is too small to cover 110 experts at top-2.
         usage_by_layer = [[0] * cfg.experts for _ in range(cfg.layers)]
         generations = []
-        torch.set_num_threads(2)
         with torch.inference_mode():
             for prompt in PROMPTS:
                 ids = tokenizer.encode(prompt)
