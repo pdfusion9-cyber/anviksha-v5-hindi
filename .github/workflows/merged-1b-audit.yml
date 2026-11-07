@@ -7,6 +7,8 @@ on:
     paths:
       - .github/workflows/merged-1b-audit.yml
       - tools/merged_1b_audit.py
+      - tools/merge_1b_repaired.py
+      - src/moe_model.py
 
 permissions:
   actions: read
@@ -15,7 +17,7 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,24 +27,32 @@ jobs:
         run: |
           python -m pip install --quiet numpy
           python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
-      - name: Download the immutable merged artifact from run 42342513329
+      - name: Download the five immutable source checkpoints
         uses: actions/download-artifact@v4
         with:
-          name: merged-1b
-          path: artifact
+          pattern: segment-*
+          path: copies
           run-id: 42342513329
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-      - name: Verify artifact presence and run isolated structural, routing and continuation audit
+      - name: Build repaired five-way merge with original routers
         run: |
           set -eu
-          test -s artifact/merged.pt
-          test -s artifact/tokenizer.json
-          test -s artifact/summary.json
+          python tools/merge_1b_repaired.py
+          test -s repaired/merged.pt
+          test -s repaired/tokenizer.json
+          test -s repaired/summary.json
+      - name: Audit repaired checkpoint, all-expert coverage and generations
+        run: |
+          set -eu
+          mkdir -p artifact
+          cp repaired/merged.pt repaired/tokenizer.json repaired/summary.json artifact/
           python tools/merged_1b_audit.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: merged-1b-audit-report
-          path: audit/merged_1b_audit.json
+          name: repaired-merged-1b-audit
+          path: |
+            repaired/
+            audit/merged_1b_audit.json
           if-no-files-found: warn
