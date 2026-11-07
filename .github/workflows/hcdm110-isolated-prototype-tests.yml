@@ -53,3 +53,10 @@ jobs:
             "production_model_modified":False
           },indent=2))
           PY
+
+      - name: Run 1,000-example DG and CA3 benchmark
+        run: |
+          python research/hcdm110/benchmark_ca3_dg.py --out reports/hcdm110_ca3_dg_benchmark.json
+      - name: Validate benchmark reproducibility and metrics
+        run: |
+          python research/hcdm110/test_benchmark_ca3_dg.py
