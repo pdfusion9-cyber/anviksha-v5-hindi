@@ -394,14 +394,14 @@ def main() -> None:
                     (f"Give a practical checklist for {label}.", checklist),
                     (f"What common mistake should be avoided with {label}?", pitfall),
                 ]
-                prefix, answer_prefix = "User: ", "\\nAssistant: "
+                prefix, answer_prefix = "User: ", "\nAssistant: "
             else:
                 variants = [
                     (f"{label} को सरल भाषा में समझाइए।", explanation),
                     (f"{label} के लिए एक व्यावहारिक checklist दीजिए।", checklist),
                     (f"{label} में कौन-सी सामान्य गलती से बचना चाहिए?", pitfall),
                 ]
-                prefix, answer_prefix = "उपयोगकर्ता: ", "\\nसहायक: "
+                prefix, answer_prefix = "उपयोगकर्ता: ", "\nसहायक: "
             target = heldout_rows if topic_index >= split else train_rows
             for question, answer in variants:
                 target.append({
