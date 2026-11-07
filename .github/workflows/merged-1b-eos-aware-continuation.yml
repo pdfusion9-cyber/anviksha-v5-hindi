@@ -1,6 +1,11 @@
 name: merged-1b-eos-aware-continuation
 
 on:
+  push:
+    branches:
+      - experiment/merged-1b-eos-resume-20261107
+    paths:
+      - .github/workflows/merged-1b-eos-aware-continuation.yml
   workflow_dispatch:
     inputs:
       source-run-id:
