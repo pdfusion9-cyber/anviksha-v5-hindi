@@ -66,3 +66,9 @@ jobs:
       - name: Validate harder retrieval benchmark
         run: |
           python research/hcdm110/test_hard_dg_ca3.py
+      - name: Run supervised learnable DG retrieval comparison
+        run: |
+          python research/hcdm110/benchmark_learnable_dg.py --out reports/hcdm110_learnable_dg.json
+      - name: Validate learnable DG comparison
+        run: |
+          python research/hcdm110/test_learnable_dg.py
