@@ -1,18 +1,15 @@
 name: merge-now
 
-# Fold the five trained copies into one model, without touching their training.
+# Fold the five trained copies into one model and publish it as an artifact.
 #
-# The copies are 215,593,728 parameters each, twenty-two experts per layer. Five
-# of those merge to 110 experts and 1,046,065,920 parameters -- past a billion,
-# with active parameters unchanged at 26,750,976 so inference costs the same.
+# 5 x 215,593,728 parameters, twenty-two experts each, merge to 110 experts and
+# just over a billion parameters with active parameters unchanged, so inference
+# costs the same.
 #
-# Divergence was measured before this ran: movement from init of 0.117 to 0.153
-# against a 0.10 threshold, which is what makes the merge worth doing rather than
-# just making a bigger file.
-#
-# This workflow reads artifacts only. It does not stop, cancel or touch any
-# running segment; the five chains keep training while this produces a snapshot
-# of where they are now.
+# The first version downloaded the artifacts with urllib and failed: the archive
+# URL redirects to blob storage and the Authorization header does not survive the
+# redirect. The action handles that, so each copy is fetched with it and the run
+# ids come from a step output rather than being typed in.
 
 on:
   workflow_dispatch:
@@ -49,76 +46,92 @@ jobs:
           import json, os, urllib.request
           repo = os.environ["GITHUB_REPOSITORY"]
           tok = os.environ["GH_TOKEN"]
-
           def api(url):
               req = urllib.request.Request(url, headers={
                   "Authorization": f"Bearer {tok}",
                   "Accept": "application/vnd.github+json"})
               return json.loads(urllib.request.urlopen(req).read())
-
           best = {}
-          for page in (1, 2, 3):
+          for page in (1, 2, 3, 4):
               runs = api(f"https://api.github.com/repos/{repo}/actions/runs"
                          f"?per_page=100&page={page}")["workflow_runs"]
               if not runs:
                   break
               for r in runs:
-                  if r["name"] != "long-train":
-                      continue
                   if r.get("conclusion") != "success":
                       continue
-                  arts = api(r["artifacts_url"])["artifacts"]
-                  for a in arts:
+                  if r["name"] not in ("long-train", "vocab-then-train"):
+                      continue
+                  for a in api(r["artifacts_url"])["artifacts"]:
                       n = a["name"]
                       if n.startswith("segment-"):
-                          copy = n.split("-")[1]
-                          if copy not in best:
-                              best[copy] = (r["run_number"], r["id"], a["id"], n,
-                                            a["size_in_bytes"])
-          for c in sorted(best):
-              print(f"copy {c}: run #{best[c][0]} artifact {best[c][3]} "
-                    f"{best[c][4]/1e6:.0f} MB")
+                          c = n.split("-")[1]
+                          if c not in best:
+                              best[c] = r["id"]
           if len(best) != 5:
-              raise SystemExit(f"found {len(best)} copies, need five")
-          with open("found.json", "w") as f:
-              json.dump({c: {"run_id": v[1], "artifact_id": v[2], "name": v[3]}
-                         for c, v in best.items()}, f, indent=1)
-          print("all five located")
+              raise SystemExit(f"found {len(best)} copies, need five: {sorted(best)}")
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a") as f:
+              for c, rid in best.items():
+                  f.write(f"run{c}={rid}\n")
+                  print(f"copy {c}: run {rid}")
           PY
 
-      - name: Download the five checkpoints
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fetch copy 0
+        uses: actions/download-artifact@v4
+        with:
+          pattern: segment-0-*
+          path: copies/0
+          run-id: ${{ steps.find.outputs.run0 }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Fetch copy 1
+        uses: actions/download-artifact@v4
+        with:
+          pattern: segment-1-*
+          path: copies/1
+          run-id: ${{ steps.find.outputs.run1 }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Fetch copy 2
+        uses: actions/download-artifact@v4
+        with:
+          pattern: segment-2-*
+          path: copies/2
+          run-id: ${{ steps.find.outputs.run2 }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Fetch copy 3
+        uses: actions/download-artifact@v4
+        with:
+          pattern: segment-3-*
+          path: copies/3
+          run-id: ${{ steps.find.outputs.run3 }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+      - name: Fetch copy 4
+        uses: actions/download-artifact@v4
+        with:
+          pattern: segment-4-*
+          path: copies/4
+          run-id: ${{ steps.find.outputs.run4 }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+
+      - name: Show what arrived
         run: |
-          python - <<'PY'
-          import json, os, urllib.request, zipfile, io, subprocess
-          repo = os.environ["GITHUB_REPOSITORY"]
-          tok = os.environ["GH_TOKEN"]
-          found = json.load(open("found.json"))
-          for copy in sorted(found):
-              art = found[copy]["artifact_id"]
-              url = f"https://api.github.com/repos/{repo}/actions/artifacts/{art}/zip"
-              req = urllib.request.Request(url, headers={
-                  "Authorization": f"Bearer {tok}"})
-              blob = urllib.request.urlopen(req).read()
-              z = zipfile.ZipFile(io.BytesIO(blob))
-              os.makedirs(f"copies/{copy}", exist_ok=True)
-              z.extractall(f"copies/{copy}")
-              print(f"copy {copy}: {len(blob)/1e6:.0f} MB extracted")
-          PY
+          find copies -name chat.pt | sort
+          echo "checkpoints: $(find copies -name chat.pt | wc -l)"
 
       - name: Fold them into one model
         run: |
           set -eu
-          ls -R copies | head -20
           mkdir -p work out
           FIRST=$(find copies/0 -name chat.pt | head -1)
           test -f "$FIRST" || { echo "copy 0 has no checkpoint"; exit 1; }
           cp "$FIRST" work/acc.pt
-          TOK=$(find copies -name tokenizer.json | head -1)
-          echo "tokenizer: ${TOK:-none}"
+          TOK=$(find copies -name tokenizer.json | head -1 || true)
           [ -n "$TOK" ] && cp "$TOK" work/tok.json || true
-
           for C in 1 2 3 4; do
             NEXT=$(find "copies/$C" -name chat.pt | head -1)
             test -f "$NEXT" || { echo "copy $C has no checkpoint"; exit 1; }
@@ -129,7 +142,6 @@ jobs:
               --threshold ${{ inputs.threshold }} --average-shared
             mv work/next.pt work/acc.pt
           done
-
           cp work/acc.pt out/merged.pt
           [ -f work/tok.json ] && cp work/tok.json out/tokenizer.json || true
           python - <<'PY'
@@ -140,7 +152,7 @@ jobs:
           st = torch.load("out/merged.pt", weights_only=False)
           cfg = MoEConfig(**st["config"])
           c = cfg.counts()
-          print(f"\nMERGED {c['total']:,} parameters, {c['active']:,} active")
+          print(f"MERGED {c['total']:,} parameters, {c['active']:,} active")
           print(f"experts {cfg.experts}")
           Path("out/summary.json").write_text(json.dumps(
               {"config": cfg.__dict__, **c}, indent=2))
