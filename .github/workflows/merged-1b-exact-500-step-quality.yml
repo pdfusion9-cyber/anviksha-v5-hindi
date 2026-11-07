@@ -1,0 +1,164 @@
+name: merged-1b-exact-500-step-quality-experiment
+
+on:
+  push:
+    branches:
+      - experiment/merged-1b-eos-resume-20261107
+    paths:
+      - .github/workflows/merged-1b-exact-500-step-quality.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  controlled-continuation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --no-cache-dir --quiet numpy zstandard
+          python -m pip install --no-cache-dir --quiet torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Download immutable 50-step candidate with optimizer and stream state
+        uses: actions/download-artifact@v4
+        with:
+          name: merged-1b-eos-aware-continuation-report
+          path: prior
+          run-id: 42358724076
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+
+      - name: Verify prior candidate and saved continuation state
+        run: |
+          set -eu
+          test -s prior/continuation/chat.pt
+          test -s prior/continuation/tokenizer.json
+          python - <<'PY'
+          import torch, json
+          p=torch.load("prior/continuation/chat.pt",map_location="cpu",mmap=True,weights_only=False)
+          e=p.get("extra") or {}
+          assert p.get("step")==50, f"expected global step 50, got {p.get('step')}"
+          assert isinstance(p.get("optimiser"),dict), "optimizer state missing"
+          assert isinstance(e.get("window_stream"),dict), "main stream cursor missing"
+          assert e.get("rng_state") is not None, "sampler RNG state missing"
+          assert e.get("corpus_sha256"), "original corpus fingerprint missing"
+          assert e.get("resume_policy")=="fresh_stream", f"unexpected prior policy {e.get('resume_policy')}"
+          print(json.dumps({"step":p["step"],"optimizer_state":"present","corpus_sha256":e["corpus_sha256"],"docs_read":e.get("docs_read"),"tokens_seen":e.get("tokens_seen")},indent=2))
+          PY
+          python tools/audit_merged_1b_checkpoint.py --checkpoint prior/continuation/chat.pt --tokenizer prior/continuation/tokenizer.json --out reports/prior_integrity.json
+
+      - name: Rebuild exact original main corpus and verify its fingerprint
+        run: |
+          set -eu
+          python src/fetch_hplt.py --lang hin_Deva --max-bytes 250000000 --max-docs 5000 --min-chars 200 --out-dir data/hplt_hi
+          python src/fetch_hplt.py --lang eng_Latn --max-bytes 250000000 --max-docs 5000 --min-chars 200 --min-script 0.5 --out-dir data/hplt_en
+          python tools/prepare_merged_1b_corpus.py --english data/hplt_en/hindi_corpus.txt --hindi data/hplt_hi/hindi_corpus.txt --out data/merged_1b_continuation.jsonl --min-english-docs 500 --min-hindi-docs 500
+          python - <<'PY'
+          import hashlib, torch
+          p=torch.load("prior/continuation/chat.pt",map_location="cpu",mmap=True,weights_only=False)
+          expected=p["extra"]["corpus_sha256"]
+          actual=hashlib.sha256(open("data/merged_1b_continuation.jsonl","rb").read()).hexdigest()
+          print("saved corpus sha256:",expected)
+          print("rebuilt corpus sha256:",actual)
+          if expected != actual: raise SystemExit("exact main corpus reconstruction failed; refusing continuation")
+          PY
+
+      - name: Build separate curated bilingual replay and held-out sets
+        run: |
+          python tools/build_merged_1b_instruction_replay.py --out data/instruction_replay.jsonl --heldout-out data/instruction_heldout.jsonl
+
+      - name: Measure held-out English and Hindi loss before continuation
+        run: |
+          python tools/evaluate_merged_1b_heldout.py --checkpoint prior/continuation/chat.pt --tokenizer prior/continuation/tokenizer.json --heldout data/instruction_heldout.jsonl --out reports/heldout_before.json
+
+      - name: Exact optimizer and main-stream resume for 500 additional steps
+        run: |
+          set -eu
+          python src/stream_train.py \
+            --text data/merged_1b_continuation.jsonl \
+            --out continuation \
+            --init-from prior/continuation/chat.pt \
+            --tokenizer-from prior/continuation/tokenizer.json \
+            --resume \
+            --replay-text data/instruction_replay.jsonl \
+            --replay-fraction 0.5 \
+            --vocab 8192 \
+            --dim 384 \
+            --layers 8 \
+            --heads 6 \
+            --experts 110 \
+            --top-k 2 \
+            --balanced-routing \
+            --ffn-mult 4 \
+            --seq-len 256 \
+            --batch 2 \
+            --lr 0.000005 \
+            --optimizer adafactor \
+            --dtype fp32 \
+            --target-steps 550 \
+            --checkpoint-every 25 \
+            --clock-budget-minutes 300 \
+            --threads 2 \
+            --buffer-windows 32
+
+      - name: Verify exact resume, optimizer continuity and 500 trained steps
+        run: |
+          set -eu
+          python - <<'PY'
+          import json, torch
+          p=torch.load("continuation/chat.pt",map_location="cpu",mmap=True,weights_only=False)
+          e=p.get("extra") or {}
+          assert p.get("step")==550, f"expected global step 550, got {p.get('step')}"
+          assert isinstance(p.get("optimiser"),dict), "optimizer state missing"
+          assert e.get("resume_policy")=="exact_stream_and_optimizer_resume", e.get("resume_policy")
+          assert e.get("corpus_sha256"), "main corpus hash missing"
+          assert e.get("replay_corpus_sha256"), "replay corpus hash missing"
+          assert isinstance(e.get("window_stream"),dict), "main stream cursor missing"
+          assert isinstance(e.get("replay_stream"),dict), "replay cursor missing"
+          print(json.dumps({"global_step":p["step"],"additional_steps":p["step"]-50,"resume_policy":e["resume_policy"],"main_corpus_sha256":e["corpus_sha256"],"replay_corpus_sha256":e["replay_corpus_sha256"],"docs_read":e.get("docs_read"),"tokens_seen":e.get("tokens_seen")},indent=2))
+          PY
+          python tools/audit_merged_1b_checkpoint.py --checkpoint continuation/chat.pt --tokenizer continuation/tokenizer.json --out reports/candidate_integrity.json
+          python - <<'PY'
+          import json
+          d=json.load(open("reports/candidate_integrity.json"))
+          assert d["global_step"]==550
+          assert d["all_float_tensors_finite"] and d["tied_embeddings"]
+          assert d["optimizer_state_present"] and d["expert_usage_validation"]["passed"]
+          PY
+
+      - name: Measure held-out English and Hindi loss after continuation
+        run: |
+          python tools/evaluate_merged_1b_heldout.py --checkpoint continuation/chat.pt --tokenizer continuation/tokenizer.json --heldout data/instruction_heldout.jsonl --out reports/heldout_after.json
+          python - <<'PY'
+          import json
+          b=json.load(open("reports/heldout_before.json"))["by_language"]
+          a=json.load(open("reports/heldout_after.json"))["by_language"]
+          out={}
+          for lang in ("en","hi"):
+              before=b[lang]["mean_loss"]; after=a[lang]["mean_loss"]
+              out[lang]={"before":before,"after":after,"delta":after-before,"improved":after<before}
+          print(json.dumps(out,indent=2))
+          json.dump(out,open("reports/heldout_delta.json","w"),indent=2)
+          PY
+
+      - name: Compare same six prompts and repetition metrics
+        run: |
+          python tools/merged_1b_compare.py --baseline prior/continuation/chat.pt --candidate continuation/chat.pt --tokenizer continuation/tokenizer.json --out reports/six_prompt_comparison.json --max-new 48
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: merged-1b-exact-500-step-quality-report
+          path: |
+            reports/
+            continuation/
+            data/instruction_replay.jsonl.manifest.json
+            data/merged_1b_continuation.jsonl.manifest.json
+          if-no-files-found: warn
