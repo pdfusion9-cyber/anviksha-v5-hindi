@@ -45,7 +45,7 @@ jobs:
                   if r.get("conclusion") != "success": continue
                   for a in api(r["artifacts_url"])["artifacts"]:
                       n = a["name"]
-                      if n.startswith("segment-") and r["name"] == "vocab-then-train":
+                      if n.startswith("segment-"):
                           c = n.split("-")[1]
                           if c not in best: best[c] = r["id"]
                       if n == "merged-1b" and merged is None:
