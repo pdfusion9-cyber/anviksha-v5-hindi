@@ -16,9 +16,9 @@ on:
         required: true
         default: "42233090777"
       steps:
-        description: "answer-only SFT optimizer steps"
+        description: "answer-only SFT optimizer steps; 0 means one full shuffled epoch"
         required: true
-        default: "120"
+        default: "0"
       learning_rate:
         description: "conservative SFT learning rate"
         required: true
@@ -31,7 +31,7 @@ permissions:
 jobs:
   chat-sft:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
@@ -92,10 +92,10 @@ jobs:
             --heldout data/multi_heldout.jsonl \
             --out runs/kavach_model1_chat_sft.pt \
             --report runs/kavach_model1_chat_sft.json \
-            --steps "${{ inputs.steps || '120' }}" \
+            --steps "${{ github.event.inputs.steps || '0' }}" \
             --learning-rate "${{ inputs.learning_rate || '0.00002' }}" \
             --batch-size 1 --max-seq-len 256 --max-answer-tokens 96 \
-            --eval-limit 32 --threads 2
+            --eval-limit 128 --threads 2
       - name: Verify base remains unchanged and candidate is loadable
         run: |
           sha256sum -c base/source.sha256
