@@ -8,6 +8,13 @@ name: merge-forensics
 
 on:
   workflow_dispatch:
+    inputs:
+      run0: {description: "copy 0 run id", required: true, default: "42342104197"}
+      run1: {description: "copy 1 run id", required: true, default: "42342106834"}
+      run2: {description: "copy 2 run id", required: true, default: "42342110098"}
+      run3: {description: "copy 3 run id", required: true, default: "42342112870"}
+      run4: {description: "copy 4 run id", required: true, default: "42342116426"}
+      merged: {description: "merged-1b run id", required: true, default: "42375849085"}
 
 permissions:
   actions: read
@@ -25,44 +32,12 @@ jobs:
       - name: Install
         run: python -m pip install --quiet numpy
 
-      - name: Find the five copies and the merged model
-        id: find
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python - <<'PY'
-          import json, os, urllib.request
-          repo = os.environ["GITHUB_REPOSITORY"]; tok = os.environ["GH_TOKEN"]
-          def api(u):
-              r = urllib.request.Request(u, headers={"Authorization": f"Bearer {tok}",
-                                                     "Accept": "application/vnd.github+json"})
-              return json.loads(urllib.request.urlopen(r).read())
-          best, merged = {}, None
-          for page in (1, 2, 3):
-              runs = api(f"https://api.github.com/repos/{repo}/actions/runs")["workflow_runs"]
-              if not runs: break
-              for r in runs:
-                  if r.get("conclusion") != "success": continue
-                  for a in api(r["artifacts_url"])["artifacts"]:
-                      n = a["name"]
-                      if n.startswith("segment-"):
-                          c = n.split("-")[1]
-                          if c not in best: best[c] = r["id"]
-                      if n == "merged-1b" and merged is None:
-                          merged = r["id"]
-          out = os.environ["GITHUB_OUTPUT"]
-          with open(out, "a") as f:
-              for c, rid in best.items(): f.write(f"run{c}={rid}\n")
-              f.write(f"merged={merged}\n")
-          print("copies", best, "merged run", merged)
-          PY
-
       - name: Fetch merged
         uses: actions/download-artifact@v4
         with:
           pattern: merged-1b
           path: data/merged
-          run-id: ${{ steps.find.outputs.merged }}
+          run-id: ${{ inputs.merged }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
       - name: Fetch copy 0
@@ -70,7 +45,7 @@ jobs:
         with:
           pattern: segment-0-*
           path: data/c0
-          run-id: ${{ steps.find.outputs.run0 }}
+          run-id: ${{ inputs.run0 }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
       - name: Fetch copy 1
@@ -78,7 +53,7 @@ jobs:
         with:
           pattern: segment-1-*
           path: data/c1
-          run-id: ${{ steps.find.outputs.run1 }}
+          run-id: ${{ inputs.run1 }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
       - name: Fetch copy 2
@@ -86,7 +61,7 @@ jobs:
         with:
           pattern: segment-2-*
           path: data/c2
-          run-id: ${{ steps.find.outputs.run2 }}
+          run-id: ${{ inputs.run2 }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
       - name: Fetch copy 3
@@ -94,7 +69,7 @@ jobs:
         with:
           pattern: segment-3-*
           path: data/c3
-          run-id: ${{ steps.find.outputs.run3 }}
+          run-id: ${{ inputs.run3 }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
       - name: Fetch copy 4
@@ -102,7 +77,7 @@ jobs:
         with:
           pattern: segment-4-*
           path: data/c4
-          run-id: ${{ steps.find.outputs.run4 }}
+          run-id: ${{ inputs.run4 }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
 
