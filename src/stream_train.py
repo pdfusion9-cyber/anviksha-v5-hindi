@@ -239,7 +239,8 @@ def restore_training_checkpoint(
     if not isinstance(payload, dict) or "model" not in payload:
         raise ValueError("checkpoint does not contain a model state")
     saved_config = payload.get("config") or {}
-    expected_config = model.cfg.__dict__
+    model_config = getattr(model, "cfg", None)
+    expected_config = vars(model_config) if model_config is not None else {}
     for key in (
         "vocab", "dim", "layers", "heads", "seq_len", "experts",
         "top_k", "ffn_mult",
