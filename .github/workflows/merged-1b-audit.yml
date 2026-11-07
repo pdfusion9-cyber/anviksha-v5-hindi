@@ -30,7 +30,7 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const current = context.runId;
-            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
               owner, repo, branch: context.ref.replace('refs/heads/', ''),
               per_page: 100
             });
