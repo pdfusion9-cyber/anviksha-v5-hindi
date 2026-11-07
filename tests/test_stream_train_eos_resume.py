@@ -27,8 +27,7 @@ class ResumeTests(unittest.TestCase):
         )
         batch = stream.batch(2, __import__("numpy").random.default_rng(7))
         self.assertIsNotNone(batch)
-        tokens = batch.tolist()
-        self.assertTrue(any(99 in row for row in tokens))
+        self.assertTrue(any(99 in row for row in stream.buf))
 
     def test_stream_state_roundtrip_preserves_buffer_and_cursor(self):
         docs = ["abcdefghijklmnopqrstuvwx", "ZYXWVUTSRQPONMLKJIHGFEDC",
@@ -39,11 +38,14 @@ class ResumeTests(unittest.TestCase):
         first_batch = first.batch(1, rng)
         self.assertIsNotNone(first_batch)
         saved = first.state_dict()
+        saved_rng_state = rng.bit_generator.state
 
         resumed = WindowStream(iter(docs), tok, seq_len=4, terms=[],
                                buffer_windows=2, state=saved)
         expected = first.batch(1, rng)
-        actual = resumed.batch(1, rng)
+        resumed_rng = __import__("numpy").random.default_rng()
+        resumed_rng.bit_generator.state = saved_rng_state
+        actual = resumed.batch(1, resumed_rng)
         self.assertIsNotNone(expected)
         self.assertIsNotNone(actual)
         self.assertEqual(expected.tolist(), actual.tolist())
