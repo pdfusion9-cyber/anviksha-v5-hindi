@@ -94,10 +94,32 @@ def verify(path):
         checked+=1
     return {"format":FORMAT,"tensor_keys":len(restored),"checked_keys":checked,"all_shapes_decoded":True,"finite_checked":True,"metadata":p["metadata"]}
 
+def dequantize_checkpoint(src,dst):
+    src=Path(src); dst=Path(dst)
+    if src.resolve()==dst.resolve(): raise ValueError("refusing source overwrite")
+    p=torch.load(src,map_location="cpu",weights_only=False,mmap=True)
+    if p.get("format")!=FORMAT: raise ValueError("format mismatch")
+    state=dequantize_state(p["model"])
+    out={"model":state,"config":p["config"],"int4_source_metadata":p["metadata"]}
+    if isinstance(p.get("sft"),dict): out["sft"]=p["sft"]
+    dst.parent.mkdir(parents=True,exist_ok=True)
+    fd,tmp=tempfile.mkstemp(dir=dst.parent,prefix=dst.name); os.close(fd)
+    try:
+        torch.save(out,tmp)
+        os.replace(tmp,dst)
+    finally:
+        if os.path.exists(tmp): os.unlink(tmp)
+    return {"source":str(src),"output":str(dst),"output_size_bytes":dst.stat().st_size,
+            "tensor_keys":len(state),"format":"dequantized-fp32-from-int4"}
+
 def main():
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)
     q=sub.add_parser("quantize"); q.add_argument("--input",required=True); q.add_argument("--output",required=True); q.add_argument("--tokenizer"); q.add_argument("--group-size",type=int,default=128)
     v=sub.add_parser("verify"); v.add_argument("--input",required=True)
+    d=sub.add_parser("dequantize"); d.add_argument("--input",required=True); d.add_argument("--output",required=True)
     a=ap.parse_args()
-    print(json.dumps(quantize(a.input,a.output,a.tokenizer,a.group_size) if a.cmd=="quantize" else verify(a.input),indent=2))
+    if a.cmd=="quantize": result=quantize(a.input,a.output,a.tokenizer,a.group_size)
+    elif a.cmd=="verify": result=verify(a.input)
+    else: result=dequantize_checkpoint(a.input,a.output)
+    print(json.dumps(result,indent=2))
 if __name__=="__main__": main()
