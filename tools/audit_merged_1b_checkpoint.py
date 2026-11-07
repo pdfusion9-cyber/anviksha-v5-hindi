@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -19,6 +20,49 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: f.read(8 * 1024 * 1024), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def validate_expert_usage(usage, expected_experts: int, rounding_digits: int = 3) -> dict:
+    """Validate balanced routing while accounting for per-expert display rounding.
+
+    MoELM.expert_usage() rounds each component independently to three decimals.
+    With 110 experts, the sum can therefore differ from 1 by as much as
+    110 * 0.0005 even when the underlying vector is correctly normalized.
+    """
+    values = [float(value) for value in usage]
+    if len(values) != expected_experts:
+        raise ValueError(
+            f"expected {expected_experts} expert usage values, got {len(values)}"
+        )
+    if not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in values):
+        raise ValueError("expert usage contains non-finite or out-of-range values")
+
+    observed_sum = math.fsum(values)
+    rounding_tolerance = expected_experts * (0.5 * (10 ** (-rounding_digits))) + 1e-6
+    if abs(observed_sum - 1.0) > rounding_tolerance:
+        raise ValueError(
+            f"expert usage sum {observed_sum:.6f} exceeds rounding tolerance "
+            f"{rounding_tolerance:.6f}"
+        )
+
+    minimum = min(values)
+    maximum = max(values)
+    if minimum <= 0.0:
+        raise ValueError("at least one expert received zero token assignments")
+    ratio = maximum / minimum
+    if ratio > 1.5:
+        raise ValueError(
+            f"expert usage imbalance too high: max/min ratio {ratio:.3f} > 1.5"
+        )
+    return {
+        "passed": True,
+        "expert_count": len(values),
+        "rounded_sum": round(observed_sum, 6),
+        "rounding_tolerance": round(rounding_tolerance, 6),
+        "minimum_share": minimum,
+        "maximum_share": maximum,
+        "max_min_ratio": round(ratio, 4),
+    }
 
 
 def main() -> None:
@@ -60,7 +104,11 @@ def main() -> None:
         raise SystemExit("embedding/output weights are not tied-identical")
     extra = ck.get("extra") or {}
     usage = extra.get("expert_usage", [])
-    usage_sum = float(sum(usage)) if usage else 0.0
+    usage_sum = float(math.fsum(float(v) for v in usage)) if usage else 0.0
+    usage_validation = (
+        validate_expert_usage(usage, cfg.experts)
+        if usage else {"passed": False, "reason": "expert usage missing"}
+    )
     report = {
         "checkpoint": str(args.checkpoint),
         "checkpoint_bytes": args.checkpoint.stat().st_size,
@@ -75,6 +123,7 @@ def main() -> None:
         "expert_usage_available": bool(usage),
         "expert_usage": usage,
         "expert_usage_sum": usage_sum,
+        "expert_usage_validation": usage_validation,
         "optimizer_state_present": isinstance(ck.get("optimiser"), dict),
         "resume_policy": extra.get("resume_policy"),
         "corpus_sha256": extra.get("corpus_sha256"),
