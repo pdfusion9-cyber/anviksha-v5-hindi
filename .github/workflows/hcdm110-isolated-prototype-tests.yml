@@ -72,3 +72,9 @@ jobs:
       - name: Validate learnable DG comparison
         run: |
           python research/hcdm110/test_learnable_dg.py
+      - name: Run supervised contrastive DG top-k and validation-tuned hybrid benchmark
+        run: |
+          python research/hcdm110/benchmark_contrastive_dg.py --out reports/hcdm110_contrastive_dg.json
+      - name: Validate contrastive DG benchmark
+        run: |
+          python research/hcdm110/test_contrastive_dg.py
