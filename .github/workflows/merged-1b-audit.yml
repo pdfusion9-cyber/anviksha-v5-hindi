@@ -83,8 +83,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: repaired-merged-1b-audit
-          path: |
-            repaired/
-            audit/merged_1b_audit.json
+          name: repaired-merged-1b-model
+          path: repaired/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: repaired-merged-1b-audit-report
+          path: audit/merged_1b_audit.json
           if-no-files-found: warn
