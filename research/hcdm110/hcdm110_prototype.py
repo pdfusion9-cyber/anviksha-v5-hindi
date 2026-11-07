@@ -45,6 +45,34 @@ class DGPatternEncoder(nn.Module):
         return F.normalize(sparse, dim=-1)
 
 
+class LearnableDGEncoder(nn.Module):
+    """Trainable sparse expansion for controlled DG representation experiments.
+
+    The projection is learned only from labelled memory episodes in the synthetic
+    benchmark. It is never connected to or loaded into the production backbone.
+    """
+    def __init__(self, input_dim: int = 384, expansion_dim: int = 1024,
+                 active_k: int = 64, seed: int = 110) -> None:
+        super().__init__()
+        if min(input_dim, expansion_dim, active_k) <= 0 or active_k > expansion_dim:
+            raise ValueError("invalid learnable DG dimensions or active_k")
+        gen = torch.Generator(device="cpu").manual_seed(seed)
+        projection = torch.randn(expansion_dim, input_dim, generator=gen)
+        projection = F.normalize(projection, dim=-1)
+        self.projection = nn.Parameter(projection)
+        self.active_k = int(active_k)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 2 or x.shape[-1] != self.projection.shape[-1]:
+            raise ValueError("learnable DG input must have shape [B, input_dim]")
+        if not torch.isfinite(x).all():
+            raise ValueError("learnable DG input contains non-finite values")
+        scores = F.relu(x.float() @ self.projection.float().T)
+        values, indices = scores.topk(self.active_k, dim=-1)
+        sparse = torch.zeros_like(scores).scatter(1, indices, values)
+        return F.normalize(sparse, dim=-1)
+
+
 class AssociativeMemory:
     """Bounded CPU key-value memory with cosine top-k retrieval.
 
