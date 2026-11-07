@@ -60,3 +60,9 @@ jobs:
       - name: Validate benchmark reproducibility and metrics
         run: |
           python research/hcdm110/test_benchmark_ca3_dg.py
+      - name: Run harder multi-seed independent-cue DG and CA3 benchmark
+        run: |
+          python research/hcdm110/benchmark_hard_dg_ca3.py --out reports/hcdm110_hard_dg_ca3.json
+      - name: Validate harder retrieval benchmark
+        run: |
+          python research/hcdm110/test_hard_dg_ca3.py
